@@ -50,6 +50,7 @@
 #include "DataFormats/Math/interface/AlgebraicROOTObjects.h"
 #include "TrackingTools/AnalyticalJacobians/interface/AnalyticalCurvilinearJacobian.h"
 #include "TrackingTools/AnalyticalJacobians/interface/JacobianLocalToCurvilinear.h"
+#include "TrackingTools/AnalyticalJacobians/interface/JacobianCurvilinearToLocal.h"
 #include "TrackingTools/AnalyticalJacobians/interface/JacobianCartesianToCurvilinear.h"
 #include "DataFormats/GeometryCommonDetAlgo/interface/ErrorFrameTransformer.h"
 #include "TrackingTools/GeomPropagators/interface/AnalyticalPropagator.h"
@@ -58,6 +59,12 @@
 #include "MagneticField/Engine/interface/MagneticField.h"
 #include "MagneticField/Records/interface/IdealMagneticFieldRecord.h"
 #include "TrackingTools/TrajectoryParametrization/interface/CurvilinearTrajectoryParameters.h"
+#include "TrackingTools/KalmanUpdators/interface/KFSwitching1DUpdator.h"
+#include "TrackingTools/TransientTrackingRecHit/interface/TransientTrackingRecHitBuilder.h"
+#include "TrackingTools/Records/interface/TransientRecHitRecord.h" 
+#include "RecoTracker/TransientTrackingRecHit/interface/TkTransientTrackingRecHitBuilder.h"
+#include "TrackingTools/TrackFitters/interface/TrajectoryStateCombiner.h"
+
 
 #include "TFile.h"
 #include "TTree.h"
@@ -161,16 +168,24 @@ private:
   std::vector<float> localy_state;
 
   //material stuff
-  std::vector<std::vector<double>> trackQ;
-  std::vector<std::vector<double>> trackH;
-  std::vector<std::vector<double>> trackF;
+  std::vector<std::vector<double>> trackQf;
+  std::vector<std::vector<double>> trackHf;
+  std::vector<std::vector<double>> trackFf;
+  std::vector<std::vector<double>> trackQr;
+  std::vector<std::vector<double>> trackHr;
+  std::vector<std::vector<double>> trackFr;
   std::vector<std::vector<double>> trackC;
 
   std::vector<std::vector<double>> updState;
   std::vector<std::vector<double>> backPropState;
   std::vector<std::vector<double>> forwardPropState;
 
+  std::vector<std::vector<double>> updStateLocal;
+  std::vector<std::vector<double>> fwdPredStateLocal;
+  std::vector<std::vector<double>> bkgPredStateLocal;
+  
   std::vector<std::vector<double>> curvpars;
+  std::vector<int> hitDimension;
 
   float trackEta;
   float trackPhi;
@@ -253,14 +268,21 @@ HitAnalyzer::HitAnalyzer(const edm::ParameterSet &iConfig)
   tree->Branch("globalrErr", &globalrErr);
   tree->Branch("globalzErr", &globalzErr);
   tree->Branch("globalrphiErr", &globalrphiErr);
-  tree->Branch("trackQ", &trackQ);
-  tree->Branch("trackH", &trackH);
-  tree->Branch("trackF", &trackF);
+  tree->Branch("trackQf", &trackQf);
+  tree->Branch("trackHf", &trackHf);
+  tree->Branch("trackFf", &trackFf);
+  tree->Branch("trackQr", &trackQr);
+  tree->Branch("trackHr", &trackHr);
+  tree->Branch("trackFr", &trackFr);
   tree->Branch("trackC", &trackC);
   tree->Branch("updState", &updState);
   tree->Branch("backPropState", &backPropState);
   tree->Branch("forwardPropState", &forwardPropState);
+  tree->Branch("updStateLocal", &updStateLocal);
+  tree->Branch("fwdPredStateLocal", &fwdPredStateLocal);
+  tree->Branch("bkgPredStateLocal", &bkgPredStateLocal);
   tree->Branch("curvpars", &curvpars);
+  tree->Branch("hitDimension", &hitDimension);
 }
 
 HitAnalyzer::~HitAnalyzer()
@@ -295,6 +317,9 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
   ESHandle<MagneticField> magfield;
   iSetup.get<IdealMagneticFieldRecord>().get(magfield);
   auto field = magfield.product();
+  
+  edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
+  iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
 
   for (unsigned int j = 0; j < trajH->size(); ++j)
   {
@@ -396,29 +421,56 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
     backPropState.clear();
     forwardPropState.clear();
 
+    updStateLocal.clear();
+    fwdPredStateLocal.clear();
+    bkgPredStateLocal.clear();
+    
     //material stuff
-    trackQ.clear();
-    trackH.clear();
-    trackF.clear();
+    trackQf.clear();
+    trackHf.clear();
+    trackFf.clear();
+    trackQr.clear();
+    trackHr.clear();
+    trackFr.clear();
     trackC.clear();
+    
+    hitDimension.clear();
 
     const float mass = 0.1395703;
     const float maxDPhi = 1.6;
-    PropagatorWithMaterial Propagator((*trajH)[j].direction(), mass, field, maxDPhi, true, -1., false);
+//     printf("traj propdir = %i\n", int((*trajH)[j].direction()));
+    
 
+    PropagationDirection rpropdir = (*trajH)[j].direction();
+    PropagationDirection fpropdir = rpropdir == alongMomentum ? oppositeToMomentum : alongMomentum;
+    
+    PropagatorWithMaterial rPropagator(rpropdir, mass, field, maxDPhi, true, -1., false);
+    PropagatorWithMaterial fPropagator(fpropdir, mass, field, maxDPhi, true, -1., false);
+    
+    KFSwitching1DUpdator updator;
+    
+    for (unsigned int i = 0; i < tms.size(); ++i)
+    {
+      if (!tms[i].recHit()->isValid()) {
+        ++ninvalidHits;
+      }
+    }
+    if (ninvalidHits>0) {
+      continue;
+    }
+    
     for (unsigned int i = 0; i < tms.size(); ++i)
     {
       TrajectoryStateOnSurface updatedState = tms[i].updatedState();
 
+//       if (!tms[i].recHit()->isValid()){
+//         ninvalidHits++;
+//         continue;
+//       }
+      
       if (!updatedState.isValid())
         continue;
 
-      if (!tms[i].recHit()->isValid()){
-        ninvalidHits++;
-        continue;
-      }
-      stereo.push_back(0);
-      glued.push_back(0);
       pt.push_back(updatedState.globalMomentum().perp());
 
       const GeomDet *detectorG = globalGeometry->idToDet(tms[i].recHit()->geographicalId());
@@ -428,11 +480,15 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
       {
         PXBDetId detid(tms[i].recHit()->rawId());
         layer.push_back(detid.layer());
+        stereo.push_back(0);
+        glued.push_back(0);
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::PixelEndcap)
       {
         PXFDetId detid(tms[i].recHit()->rawId());
         layer.push_back(-1 * (detid.side() == 1) * detid.disk() + (detid.side() == 2) * detid.disk());
+        stereo.push_back(0);
+        glued.push_back(0);
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::TIB)
       {
@@ -442,7 +498,6 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
           stereo.push_back(1);
         if (detid.glued() != 0)
           glued.push_back(1);
-        local = LocalPoint(tms[i].recHit()->localPosition().x(), updatedState.localPosition().y(), tms[i].recHit()->localPosition().z());
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::TOB)
       {
@@ -452,8 +507,6 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
           stereo.push_back(1);
         if (detid.glued() != 0)
           glued.push_back(1);
-
-        local = LocalPoint(tms[i].recHit()->localPosition().x(), updatedState.localPosition().y(), tms[i].recHit()->localPosition().z());
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::TID)
       {
@@ -463,12 +516,6 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
           stereo.push_back(1);
         if (detid.glued() != 0)
           glued.push_back(1);
-
-        const StripTopology *theTopology = dynamic_cast<const StripTopology *>(&(tms[i].recHit()->detUnit()->topology()));
-        MeasurementPoint point = theTopology->measurementPosition(tms[i].recHit()->localPosition());
-        MeasurementPoint pointT = theTopology->measurementPosition(updatedState.localPosition());
-        MeasurementPoint pointC(point.x(), pointT.y());
-        local = theTopology->localPosition(pointC);
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::TEC)
       {
@@ -478,186 +525,180 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
           stereo.push_back(1);
         if (detid.glued() != 0)
           glued.push_back(1);
-
-        const StripTopology *theTopology = dynamic_cast<const StripTopology *>(&(tms[i].recHit()->detUnit()->topology()));
-        MeasurementPoint point = theTopology->measurementPosition(tms[i].recHit()->localPosition());
-        MeasurementPoint pointT = theTopology->measurementPosition(updatedState.localPosition());
-        MeasurementPoint pointC(point.x(), pointT.y());
-        local = theTopology->localPosition(pointC);
       }
 
       // material info
 
       // Get surface
       const Surface &surface = updatedState.surface();
-      // Now get information on medium
-      const MediumProperties &mp = surface.mediumProperties(); // parsed from xml tables
 
-      // Momentum vector
-      LocalVector d = updatedState.localMomentum();
-      float p2 = d.mag2();
-      d *= 1.f / sqrt(p2);
-      float xf = 1.f / std::abs(d.z()); // increase of path due to angle of incidence
-      // calculate general physics things
-      constexpr float amscon = 1.8496e-4; // (13.6MeV)**
-      const float m2 = mass * mass;       // use mass hypothesis from constructor
-      float e2 = p2 + m2;
-      float beta2 = p2 / e2;
-      // calculate the multiple scattering angle
-      float radLen = mp.radLen() * xf; // effective rad. length
-      float sigt2 = 0.;                // sigma(alpha)**2
 
-      // Calculated rms scattering angle squared.
-      float fact = 1.f + 0.038f * unsafe_logf<2>(radLen);
-      fact *= fact;
-      float a = fact / (beta2 * p2);
-      sigt2 = amscon * radLen * a;
-
-      float isl2 = 1.f / d.perp2();
-      float cl2 = (d.z() * d.z());
-      float cf2 = (d.x() * d.x()) * isl2;
-      float sf2 = (d.y() * d.y()) * isl2;
-      // Create update (transformation of independant variations
-      //   on angle in orthogonal planes to local parameters.
-      float den = 1.f / (cl2 * cl2);
-
-      float msxx = (den * sigt2) * (sf2 * cl2 + cf2);
-      float msxy = (den * sigt2) * (d.x() * d.y());
-      float msyy = (den * sigt2) * (cf2 * cl2 + sf2);
-
-      //energy loss
-      constexpr float emass = 0.511e-3;
-      constexpr float poti = 16.e-9 * 10.75;                // = 16 eV * Z**0.9, for Si Z=14
-      const float eplasma = 28.816e-9 * sqrt(2.33 * 0.498); // 28.816 eV * sqrt(rho*(Z/A)) for Si
-      const float delta0 = 2 * log(eplasma / poti) - 1.;
-
-      // calculate general physics things
-      float im2 = float(1.) / m2;
-      float e = std::sqrt(e2);
-      float eta2 = p2 * im2;
-      float ratio2 = (emass * emass) * im2;
-      float emax = float(2.) * emass * eta2 / (float(1.) + float(2.) * emass * e * im2 + ratio2);
-
-      float xi = mp.xi() * xf;
-      xi /= beta2;
-
-      float dEdx = xi * (unsafe_logf<2>(float(2.) * emass * emax / (poti * poti)) - float(2.) * (beta2)-delta0);
-
-      float dEdx2 = xi * emax * (float(1.) - float(0.5) * beta2);
-      float dPoverP = dEdx / std::sqrt(beta2) / sqrt(p2);
-      float sigp2 = dEdx2 / (beta2 * p2 * p2);
-
-      Matrix3d Qmat;
-
-      Qmat << sigp2, 0., 0.,
-          0., msxx, msxy,
-          0., msxy, msyy;
-
-      std::vector<double> Q;
-      Q.resize(9);
-      Eigen::Map<Matrix3d>(Q.data(), 3, 3) = Qmat;
-
-      trackQ.push_back(Q);
-
-      // get the transformation matrix from local coordinates to helix parameters
-      auto &x = updatedState.localParameters();
-
-      JacobianLocalToCurvilinear local2curv(surface, x, *field);
-      const AlgebraicMatrix55 &jac = local2curv.jacobian();
-
-      Matrix5d jac_copy;
-      jac_copy << jac[0][0], jac[0][1], jac[0][2], jac[0][3], jac[0][4],
-          jac[1][0], jac[1][1], jac[1][2], jac[1][3], jac[1][4],
-          jac[2][0], jac[2][1], jac[2][2], jac[2][3], jac[2][4],
-          jac[3][0], jac[3][1], jac[3][2], jac[3][3], jac[3][4],
-          jac[4][0], jac[4][1], jac[4][2], jac[4][3], jac[4][4];
-
-      std::vector<double> H;
-      H.resize(25);
-      Eigen::Map<Matrix5d>(H.data(), 5, 5) = jac_copy;
-
-      trackH.push_back(H);
+      TrajectoryStateOnSurface const& fwdtsos = tms[i].forwardPredictedState();
+      TrajectoryStateOnSurface const& revtsos = tms[i].backwardPredictedState();
+//       TrajectoryStateOnSurface const& revtsos = tms[i].updatedState();
+      auto const& hit = tms[i].recHit();
+      
+//       TrajectoryStateCombiner combiner;
+//       revtsos = combiner(revtsos,fwdtsos);
+      
+      
+      JacobianCurvilinearToLocal hf(fwdtsos.surface(), fwdtsos.localParameters(), *fwdtsos.magneticField());
+      const AlgebraicMatrix55 &jachf = hf.jacobian();
+      std::vector<double> Hf(jachf.Array(), jachf.Array()+25);
+      trackHf.push_back(Hf);
+      
+      JacobianCurvilinearToLocal hr(revtsos.surface(), revtsos.localParameters(), *revtsos.magneticField());
+      const AlgebraicMatrix55 &jachr = hr.jacobian();
+      std::vector<double> Hr(jachr.Array(), jachr.Array()+25);
+      trackHr.push_back(Hr);
 
       const AlgebraicSymMatrix55 &covariance = updatedState.curvilinearError().matrix();
-      Matrix5d jac_copy3;
-      jac_copy3 << covariance[0][0], covariance[0][1], covariance[0][2], covariance[0][3], covariance[0][4],
-          covariance[1][0], covariance[1][1], covariance[1][2], covariance[1][3], covariance[1][4],
-          covariance[2][0], covariance[2][1], covariance[2][2], covariance[2][3], covariance[2][4],
-          covariance[3][0], covariance[3][1], covariance[3][2], covariance[3][3], covariance[3][4],
-          covariance[4][0], covariance[4][1], covariance[4][2], covariance[4][3], covariance[4][4];
-
-      std::vector<double> C;
-      C.resize(25);
-      Eigen::Map<Matrix5d>(C.data(), 5, 5) = jac_copy3;
-
+      AlgebraicMatrix55 covfull(covariance);
+      std::vector<double> C(covfull.Array(), covfull.Array()+25);
       trackC.push_back(C);
 
-      LocalTrajectoryParameters updPars = updatedState.localParameters();
-      //CurvilinearTrajectoryParameters curvPrs(updPars.position(), updPars.momentum(), trackCharge);
-      AlgebraicVector5 curvPrsv = updPars.vector();
+// //       LocalTrajectoryParameters updPars = updatedState.localParameters();
+//       CurvilinearTrajectoryParameters curvPrs(updatedState.globalPosition(), updatedState.globalMomentum(), updatedState.charge());
+// //       AlgebraicVector5 curvPrsv = updPars.vector();
+// 
+//       Vector5d curvPrsv_copy;
+//       curvPrsv_copy << curvPrsv[0], curvPrsv[1], curvPrsv[2], curvPrsv[3], curvPrsv[4];
+//       std::vector<double> curvPrsv_vec;
+//       curvPrsv_vec.resize(5);
+//       Eigen::Map<Vector5d>(curvPrsv_vec.data(), 5, 1) = curvPrsv_copy;
+//       updState.push_back(curvPrsv_vec);
+      
+      CurvilinearTrajectoryParameters curvPrs(updatedState.globalPosition(), updatedState.globalMomentum(), updatedState.charge());
+      AlgebraicVector5 ustatevec = curvPrs.vector();
+      std::vector<double> ustate(ustatevec.Array(), ustatevec.Array()+5);
+      updState.push_back(ustate);
+      
+      CurvilinearTrajectoryParameters fcurvPrs(fwdtsos.globalPosition(), fwdtsos.globalMomentum(), fwdtsos.charge());
+      AlgebraicVector5 fstatevec = fcurvPrs.vector();
+      std::vector<double> fstate(fstatevec.Array(), fstatevec.Array()+5);
+      forwardPropState.push_back(fstate);
+      
+      CurvilinearTrajectoryParameters rcurvPrs(revtsos.globalPosition(), revtsos.globalMomentum(), revtsos.charge());
+      AlgebraicVector5 rstatevec = rcurvPrs.vector();
+      std::vector<double> rstate(rstatevec.Array(), rstatevec.Array()+5);
+      backPropState.push_back(rstate);
+      
+      AlgebraicVector5 ustateveclocal = updatedState.localParameters().vector();
+      std::vector<double> ustatelocal(ustateveclocal.Array(), ustateveclocal.Array()+5);
+      updStateLocal.push_back(ustatelocal);
 
-      Vector5d curvPrsv_copy;
-      curvPrsv_copy << curvPrsv[0], curvPrsv[1], curvPrsv[2], curvPrsv[3], curvPrsv[4];
-      std::vector<double> curvPrsv_vec;
-      curvPrsv_vec.resize(5);
-      Eigen::Map<Vector5d>(curvPrsv_vec.data(), 5, 1) = curvPrsv_copy;
-      updState.push_back(curvPrsv_vec);
+      AlgebraicVector5 fstateveclocal = fwdtsos.localParameters().vector();
+      std::vector<double> fstatelocal(fstateveclocal.Array(), fstateveclocal.Array()+5);
+      fwdPredStateLocal.push_back(fstatelocal);
+      
+      AlgebraicVector5 bstateveclocal = revtsos.localParameters().vector();
+      std::vector<double> bstatelocal(bstateveclocal.Array(), bstateveclocal.Array()+5);
+      bkgPredStateLocal.push_back(bstatelocal);
 
-      if (i == 0)
-      {
-        Vector5d backcurvPrsv_copy = Vector5d::Zero(5);
-        std::vector<double> backcurvPrsv_vec;
-        backcurvPrsv_vec.resize(5);
-        Eigen::Map<Vector5d>(backcurvPrsv_vec.data(), 5, 1) = backcurvPrsv_copy;
-        backPropState.push_back(backcurvPrsv_vec);
-
-        Matrix5d jac_copy2 = Matrix5d::Zero(5,5);
-        std::vector<double> F;
-        F.resize(25);
-        Eigen::Map<Matrix5d>(F.data(), 5, 5) = jac_copy2;
-
-        trackF.push_back(F);
+      if (i== (tms.size()-1)) {
+        std::vector<double> Ff(25,0.);
+        trackFf.push_back(Ff);
+        
+        std::vector<double> Q(9,0.);
+        trackQf.push_back(Q);
       }
-      else
-      {
-        const auto &propresult = Propagator.propagateWithPath(tms[i-1].updatedState(), tms[i].updatedState().surface());
-        LocalTrajectoryParameters backPars = propresult.first.localParameters();
-        AlgebraicVector5 backcurvPrsv = backPars.vector();
-
-        Vector5d backcurvPrsv_copy;
-        backcurvPrsv_copy << backcurvPrsv[0], backcurvPrsv[1], backcurvPrsv[2], backcurvPrsv[3], backcurvPrsv[4];
-        std::vector<double> backcurvPrsv_vec;
-        backcurvPrsv_vec.resize(5);
-        Eigen::Map<Vector5d>(backcurvPrsv_vec.data(), 5, 1) = backcurvPrsv_copy;
-        backPropState.push_back(backcurvPrsv_vec);
-
+      else {
+        //compute material effects
+        SurfaceSideDefinition::SurfaceSide side = fpropdir == alongMomentum ? SurfaceSideDefinition::afterSurface : SurfaceSideDefinition::beforeSurface;
+        TrajectoryStateOnSurface tmptsos(fwdtsos.localParameters(),
+                                         LocalTrajectoryError(),
+                                         fwdtsos.surface(),
+                                         fwdtsos.magneticField(),
+                                         side);
+        rPropagator.materialEffectsUpdator().updateStateInPlace(tmptsos,rpropdir);
+        AlgebraicSymMatrix55 const &qmat = tmptsos.localError().matrix();
+        std::vector<double> Q(9,0.);
+        for (unsigned int ierr=0, ijerr=0; ierr<3; ++ierr) {
+          for (unsigned int jerr=0; jerr<3; ++jerr, ++ijerr) {
+            Q[ijerr] = qmat[ierr][jerr];
+          }
+        }
+        trackQf.push_back(Q);
+        
+        //compute transport jacobian
+        //recompute updated state on adjacent measurement
+        TrajectoryStateOnSurface const& adjfwdtsos = tms[i+1].forwardPredictedState();
+        auto preciseHit = static_cast<TkTransientTrackingRecHitBuilder const*>(ttrh.product())->cloner().makeShared(tms[i+1].recHit(), adjfwdtsos);  //TODO this should be updated with the 
+//         auto preciseHit = tms[i+1].recHit();
+        TrajectoryStateOnSurface const& updstate = updator.update(adjfwdtsos, *preciseHit);
+        
+        const auto &propresult = fPropagator.propagateWithPath(updstate, fwdtsos.surface());
         AnalyticalCurvilinearJacobian curvjac;
-        GlobalTrajectoryParameters tpg = tms[i - 1].updatedState().globalParameters();
-        GlobalTrajectoryParameters tpg2 = tms[i].updatedState().globalParameters();
-        GlobalVector h = tpg.magneticFieldInInverseGeV(tpg.position());
-        curvjac.computeFullJacobian(tpg, tpg2.position(), tpg2.momentum(), h, propresult.second);
-        const AlgebraicMatrix55 &jac2 = curvjac.jacobian();
-
-        Matrix5d jac_copy2;
-        jac_copy2 << jac2[0][0], jac2[0][1], jac2[0][2], jac2[0][3], jac2[0][4],
-            jac2[1][0], jac2[1][1], jac2[1][2], jac2[1][3], jac2[1][4],
-            jac2[2][0], jac2[2][1], jac2[2][2], jac2[2][3], jac2[2][4],
-            jac2[3][0], jac2[3][1], jac2[3][2], jac2[3][3], jac2[3][4],
-            jac2[4][0], jac2[4][1], jac2[4][2], jac2[4][3], jac2[4][4];
-
-        Matrix5d eloss = Matrix5d::Identity(5, 5);
-        if (trackCharge > 0)
-          eloss(0, 0) += dPoverP;
-        else
-          eloss(0, 0) -= dPoverP;
-
-        jac_copy2 = eloss * jac_copy2;
-
-        std::vector<double> F;
-        F.resize(25);
-        Eigen::Map<Matrix5d>(F.data(), 5, 5) = jac_copy2;
-
-        trackF.push_back(F);
+        GlobalVector h = updstate.globalParameters().magneticFieldInInverseGeV(updstate.globalParameters().position());
+        curvjac.computeFullJacobian(updstate.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), h, propresult.second);
+        const AlgebraicMatrix55 &jacF = curvjac.jacobian();
+        
+        double eloss = fwdtsos.localParameters().signedInverseMomentum()/tmptsos.localParameters().signedInverseMomentum();
+        AlgebraicMatrix55 elossmat;
+        elossmat(0,0) = eloss;
+        elossmat(1,1) = 1.;
+        elossmat(2,2) = 1.;
+        elossmat(3,3) = 1.;
+        elossmat(4,4) = 1.;
+        
+        AlgebraicMatrix55 Fmat = fpropdir==alongMomentum ? AlgebraicMatrix55(eloss*jacF) : AlgebraicMatrix55(jacF*eloss);
+        
+        std::vector<double> F(Fmat.Array(), Fmat.Array()+25);
+        trackFf.push_back(F);                              
+        
+      }
+      
+      if (i==0) {
+        std::vector<double> Ff(25,0.);
+        trackFr.push_back(Ff);
+        
+        std::vector<double> Q(9,0.);
+        trackQr.push_back(Q);
+      }
+      else {
+        //compute material effects
+        SurfaceSideDefinition::SurfaceSide side = rpropdir == alongMomentum ? SurfaceSideDefinition::afterSurface : SurfaceSideDefinition::beforeSurface;
+        TrajectoryStateOnSurface tmptsos(revtsos.localParameters(),
+                                         LocalTrajectoryError(),
+                                         revtsos.surface(),
+                                         revtsos.magneticField(),
+                                         side);
+        fPropagator.materialEffectsUpdator().updateStateInPlace(tmptsos,fpropdir);
+        AlgebraicSymMatrix55 const &qmat = tmptsos.localError().matrix();
+        std::vector<double> Q(9,0.);
+        for (unsigned int ierr=0, ijerr=0; ierr<3; ++ierr) {
+          for (unsigned int jerr=0; jerr<3; ++jerr, ++ijerr) {
+            Q[ijerr] = qmat[ierr][jerr];
+          }
+        }
+        trackQr.push_back(Q);
+        
+        //compute transport jacobian
+        //recompute updated state on adjacent measurement
+        TrajectoryStateOnSurface const& adjrevtsos = tms[i-1].backwardPredictedState();
+        auto preciseHit = tms[i-1].recHit(); //n.b. this is exactly the rechit used for the update and propagation during the smoothing
+        
+        TrajectoryStateOnSurface const& updstate = updator.update(adjrevtsos, *preciseHit);
+        
+        const auto &propresult = rPropagator.propagateWithPath(updstate, revtsos.surface());
+        AnalyticalCurvilinearJacobian curvjac;
+        GlobalVector h = updstate.globalParameters().magneticFieldInInverseGeV(updstate.globalParameters().position());
+        curvjac.computeFullJacobian(updstate.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), h, propresult.second);
+        const AlgebraicMatrix55 &jacF = curvjac.jacobian();
+        
+        double eloss = revtsos.localParameters().signedInverseMomentum()/tmptsos.localParameters().signedInverseMomentum();
+        AlgebraicMatrix55 elossmat;
+        elossmat(0,0) = eloss;
+        elossmat(1,1) = 1.;
+        elossmat(2,2) = 1.;
+        elossmat(3,3) = 1.;
+        elossmat(4,4) = 1.;
+        
+        AlgebraicMatrix55 Fmat = rpropdir==alongMomentum ? AlgebraicMatrix55(eloss*jacF) : AlgebraicMatrix55(jacF*eloss);
+        
+        std::vector<double> F(Fmat.Array(), Fmat.Array()+25);
+        trackFr.push_back(F);                              
+        
       }
 
       detector.push_back(detectorG->subDetector());
@@ -713,6 +754,8 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
       globalrErr.push_back(std::sqrt(float(globalError.rerr(corrected))));
       globalzErr.push_back(std::sqrt(float(globalError.czz())));
 
+      hitDimension.push_back(tms[i].recHit()->dimension());
+      
       n = n + 1;
     }
 
