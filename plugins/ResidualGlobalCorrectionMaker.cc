@@ -64,6 +64,7 @@
 #include "TrackingTools/Records/interface/TransientRecHitRecord.h" 
 #include "RecoTracker/TransientTrackingRecHit/interface/TkTransientTrackingRecHitBuilder.h"
 #include "TrackingTools/TrackFitters/interface/TrajectoryStateCombiner.h"
+#include "../interface/OffsetMagneticField.h"
 
 
 #include "TFile.h"
@@ -131,7 +132,7 @@ private:
   virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
   virtual void endJob() override;
 
-  //virtual void beginRun(edm::Run const&, edm::EventSetup const&) override;
+  virtual void beginRun(edm::Run const&, edm::EventSetup const&) override;
   //virtual void endRun(edm::Run const&, edm::EventSetup const&) override;
   //virtual void beginLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
   //virtual void endLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
@@ -140,6 +141,7 @@ private:
   //  edm::EDGetTokenT<reco::TrackCollection>      inputTracks_;
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
+  edm::EDGetTokenT<reco::TrackCollection> inputTrack_;
 
   TFile *fout;
   TTree *tree;
@@ -203,6 +205,10 @@ private:
   
   std::vector<double> gradv;
   std::vector<double> hessv;
+  std::vector<unsigned int> globalidxv;
+  
+//   std::vector<std::pair<int, DetId> > detidparms;
+  std::map<std::pair<int, DetId>, int> detidparms;
 
   float trackEta;
   float trackPhi;
@@ -216,6 +222,10 @@ private:
   float genPt;
   float genCharge;
   int ninvalidHits;
+  unsigned int nglobalparms;
+  unsigned int nglobalparmsalignment;
+  unsigned int nglobalparmsbfield;
+  unsigned int nglobalparmseloss;
 };
 
 //
@@ -236,6 +246,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   //  inputTracks_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
   GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
+  inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
 
   n = 0;
 
@@ -303,6 +314,11 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   
   tree->Branch("gradv", &gradv);
   tree->Branch("hessv", &hessv);
+  tree->Branch("globalidxv", &globalidxv);
+  tree->Branch("nglobalparms",&nglobalparms);
+  tree->Branch("nglobalparmsalignment",&nglobalparmsalignment);
+  tree->Branch("nglobalparmsbfield",&nglobalparmsbfield);
+  tree->Branch("nglobalparmseloss",&nglobalparmseloss);
 }
 
 ResidualGlobalCorrectionMaker::~ResidualGlobalCorrectionMaker()
@@ -333,6 +349,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
   Handle<std::vector<Trajectory>> trajH;
   iEvent.getByToken(inputTraj_, trajH);
+  
+  Handle<reco::TrackCollection> trackH;
+  iEvent.getByToken(inputTrack_, trackH);
 
   ESHandle<MagneticField> magfield;
   iSetup.get<IdealMagneticFieldRecord>().get(magfield);
@@ -341,8 +360,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
   iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
 
+//   OffsetMagneticField offsetField(field, GlobalVector(0.,0.,0.));
+  
+  printf("traj size = %i, track size = %i\n", int(trajH->size()), int(trackH->size()));
+  
   for (unsigned int j = 0; j < trajH->size(); ++j)
   {
+    printf("j = %i\n", int(j));
 
     const Trajectory &traj = (*trajH)[j];
     if (traj.isLooper()) {
@@ -353,6 +377,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //     if (track.lost()>0)
     //       continue;
 
+//     const reco::Track& track = (*trackH)[j];
+//     trackPt = track.pt();
+//     trackEta = track.eta();
+//     trackPhi = track.phi();
+//     trackCharge = track.charge();
+//     trackPtErr = track.ptError();
+    
     const std::vector<TrajectoryMeasurement> &tms = (*trajH)[j].measurements();
 
     
@@ -475,8 +506,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //TODO properly handle the outside-in case
     assert(fpropdir == alongMomentum);
     
+    
+//     PropagatorWithMaterial rPropagator(rpropdir, mass, &offsetField, maxDPhi, true, -1., false);
     PropagatorWithMaterial rPropagator(rpropdir, mass, field, maxDPhi, true, -1., false);
-    PropagatorWithMaterial fPropagator(fpropdir, mass, field, maxDPhi, true, -1., false);
+//     PropagatorWithMaterial fPropagator(fpropdir, mass, field, maxDPhi, true, -1., false);
     
 //     KFSwitching1DUpdator updator;
     KFUpdator updator;
@@ -534,7 +567,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     gradv.clear();
     hessv.clear();
+    globalidxv.clear();
     
+    globalidxv.resize(npars, 0);
     gradv.resize(npars,0.);
     hessv.resize(npars*npars, 0.);
 
@@ -544,7 +579,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
     
     unsigned int alignmentidx = 0;
-    unsigned int transportidx = 0;
+    unsigned int bfieldidx = 0;
+    unsigned int elossidx = 0;
     for (unsigned int i = 0; i < tms.size(); ++i)
     {
       
@@ -552,7 +588,6 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       auto const& hit = tm.recHit();
       const GeomDet *detectorG = globalGeometry->idToDet(hit->geographicalId());
       TrajectoryStateOnSurface const& updtsos = tm.updatedState();
-      
       
       //TODO properly handle this case
       assert(updtsos.isValid());
@@ -588,25 +623,85 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       bool ispixel = GeomDetEnumerators::isTrackerPixel(detectorG->subDetector());
       //2d alignment correction for pixel hits, otherwise 1d
       A(5*i+3, alignmentidx) = 1.;
+//       const unsigned int xglobalidx = std::lower_bound(detidparms.begin(), detidparms.end(), std::make_pair(0,hit->geographicalId())) - detidparms.begin();
+      const unsigned int xglobalidx = detidparms[std::make_pair(0,hit->geographicalId())];
+//       assert(xglobalidx<detidparms.size());
+      globalidxv[alignmentidx] = xglobalidx;
       alignmentidx++;
       if (ispixel) {
         A(5*i+4, alignmentidx) = 1.;
+//         const unsigned int yglobalidx = std::lower_bound(detidparms.begin(), detidparms.end(), std::make_pair(1,hit->geographicalId())) - detidparms.begin();
+        const unsigned int yglobalidx = detidparms[std::make_pair(1,hit->geographicalId())];
+//         assert(yglobalidx<detidparms.size());
+        globalidxv[alignmentidx] = yglobalidx;
         alignmentidx++;
       }
 
       
       if (i >0) {
+        //TODO check consistency of propagation jacobians when propagating oppositeToMomentum!!!
+        
         //compute transport jacobian propagating outside in to current layer
         TrajectoryStateOnSurface const& toproptsos = tms[i-1].updatedState();
         
+        //no offset for nominal propagation
         const auto &propresult = rPropagator.geometricalPropagator().propagateWithPath(toproptsos, updtsos.surface());
         AnalyticalCurvilinearJacobian curvjac(toproptsos.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), propresult.second);
         const AlgebraicMatrix55 &jacF = curvjac.jacobian();
         
         F.block<5,5>(5*i, 5*(i-1)) = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array());
         
-        //TODO compute derivative with respect to B field here (finite differences?)
+        //analytic jacobian wrt magnitude of magnetic field
+        //TODO should we parameterize with respect to z-component instead?
+        //extending derivation from CMS NOTE 2006/001
+        const AlgebraicVector3 b(toproptsos.globalParameters().magneticFieldInInverseGeV().x(),
+                           toproptsos.globalParameters().magneticFieldInInverseGeV().y(),
+                           toproptsos.globalParameters().magneticFieldInInverseGeV().z());
+        double magb = ROOT::Math::Dot(b,b);
+        const AlgebraicVector3 h = b/magb;
 
+        const AlgebraicVector3 p0(toproptsos.globalParameters().momentum().x(),
+                            toproptsos.globalParameters().momentum().y(),
+                            toproptsos.globalParameters().momentum().z());
+        double p = ROOT::Math::Dot(p0,p0);
+        const AlgebraicVector3 T0 = p0/p;
+        double q = toproptsos.charge();
+        
+        const AlgebraicVector3 hcrossT0 = ROOT::Math::Cross(h,T0);
+        double alpha = ROOT::Math::Dot(hcrossT0,hcrossT0);
+        const AlgebraicVector3 N0 = hcrossT0/alpha;
+        double gamma = ROOT::Math::Dot(h,T0);
+        double s = propresult.second;
+        
+        //code generated by sympy
+        const AlgebraicVector3 dMdB = (s*std::cos(magb*q*s/p)/magb - p*std::sin(magb*q*s/p)/(std::pow(magb, 2)*q))*T0 + (-alpha*s*std::sin(magb*q*s/p)/magb + alpha*p*(1 - std::cos(magb*q*s/p))/(std::pow(magb, 2)*q))*N0 + (-gamma*p*(q*s*std::cos(magb*q*s/p)/p - q*s/p)/(magb*q) + gamma*p*(-magb*q*s/p + std::sin(magb*q*s/p))/(std::pow(magb, 2)*q))*h;
+
+        const AlgebraicVector3 dPdB = p*((-q*s*std::sin(magb*q*s/p)/p)*T0 + (-alpha*q*s*std::cos(magb*q*s/p)/p)*N0 + (gamma*q*s*std::sin(magb*q*s/p)/p)*h);
+
+        AlgebraicVector6 dFglobal;
+        dFglobal(0) = dMdB(0);
+        dFglobal(1) = dMdB(1);
+        dFglobal(2) = dMdB(2);
+        dFglobal(3) = dPdB(0);
+        dFglobal(4) = dPdB(1);
+        dFglobal(5) = dPdB(2);
+
+        //convert to curvilinear
+        JacobianCartesianToCurvilinear cart2curv(propresult.first.globalParameters());
+        AlgebraicVector5 iDF = cart2curv.jacobian()*dFglobal;
+        
+        //convert to tesla
+        iDF *= 2.99792458e-3;
+        
+        dF.block<5,1>(5*i, bfieldidx) = Map<const Vector5d>(iDF.Array());
+        
+//         std::cout << "dF = " << dF.block<5,1>(5*i, bfieldidx) << std::endl;
+        
+//         const unsigned int bfieldglobalidx = std::lower_bound(detidparms.begin(), detidparms.end(), std::make_pair(2,hit->geographicalId())) - detidparms.begin();
+//         assert(bfieldglobalidx<detidparms.size());
+        const unsigned int bfieldglobalidx = detidparms[std::make_pair(2,hit->geographicalId())];
+        globalidxv[nparsAlignment + bfieldidx] = bfieldglobalidx;
+        bfieldidx++;
         
         //apply material effects (in reverse)
         TrajectoryStateOnSurface tmptsos(propresult.first.localParameters(),
@@ -632,6 +727,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const double dxdz = propresult.first.localParameters().dxdz();
         const double dydz = propresult.first.localParameters().dydz();
         const double xi = updtsos.surface().mediumProperties().xi();
+//         printf("xi = %5e\n", xi);
         
         //this is printed from sympy.printing.cxxcode together with sympy.cse for automatic substitution of common expressions
         const double x0 = (((qop) > 0) - ((qop) < 0));
@@ -666,8 +762,6 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const double res_2 = -dydz*x26;
         const double res_3 = -x20*x25;
 
-        //this is printed directly from sympy.printing.cxxcode
-        //TODO find better way to simplify this
         E(5*i,5*i) = res_0;
         E(5*i,5*i+1) = res_1;
         E(5*i,5*i+2) = res_2;
@@ -676,13 +770,15 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         E(5*i+3,5*i+3) = 1.;
         E(5*i+4,5*i+4) = 1.;
         
-        std::cout << "Eloss 0,0 = " << E(5*i,5*i) << std::endl;
+//         std::cout << "Eloss 0,0 = " << E(5*i,5*i) << std::endl;
         
         //derivative of the energy loss with respect to the energy loss parameter xi
-        dE(5*i, transportidx) = res_3;
-
-        
-        transportidx++;
+        dE(5*i, elossidx) = res_3;
+//         const unsigned int elossglobalidx = std::lower_bound(detidparms.begin(), detidparms.end(), std::make_pair(3,hit->geographicalId())) - detidparms.begin();
+//         assert(elossglobalidx<detidparms.size());
+        const unsigned int elossglobalidx = detidparms[std::make_pair(3,hit->geographicalId())];        
+        globalidxv[nparsAlignment + nparsBfield + elossidx] = elossglobalidx;
+        elossidx++;
 
         //momentum kink residual
         AlgebraicVector5 const& idx0 = updtsos.localParameters().vector() - tmptsos.localParameters().vector();
@@ -734,7 +830,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //careful this is easy to screw up because it is "accidentally" symmetric
     hess.block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = -4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF - 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 2*dE.transpose()*Qinv*E*Hprop*dF;
     
-    //fill uppper triangular blocks
+    //fill upper triangular blocks
     hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = hess.block(nparsAlignment, 0, nparsBfield, nparsAlignment);
     
     hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = hess.block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment);
@@ -766,12 +862,230 @@ void ResidualGlobalCorrectionMaker::endJob()
 }
 
 // ------------ method called when starting to processes a run  ------------
-/*
+
 void 
-HitAnalyzer::beginRun(edm::Run const&, edm::EventSetup const&)
+ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup const& es)
 {
+  edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
+  es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+  
+  detidparms.clear();
+  
+//   std::map<std::pair<int,DetId>, std::tuple<int, int, int, int> > detidmap;
+  std::set<std::tuple<int, int, int, int> > keys;
+  
+  for (const GeomDet* det : globalGeometry->dets()) {
+//     printf("GeomDet pointer %p\n", det);
+    if (!det) {
+      continue;
+    }
+    if (!GeomDetEnumerators::isTracker(det->subDetector())) {
+      continue;
+    }
+    int layer = 0;
+    int subdet = det->subDetector();
+    float eta = det->surface().position().eta();
+    int ieta = std::floor(det->surface().position().eta()/0.2);
+
+    if (det->subDetector() == GeomDetEnumerators::PixelBarrel)
+    {
+      PXBDetId detid(det->geographicalId());
+      layer = detid.layer();
+    }
+    else if (det->subDetector() == GeomDetEnumerators::PixelEndcap)
+    {
+      PXFDetId detid(det->geographicalId());
+      layer = -1 * (detid.side() == 1) * detid.disk() + (detid.side() == 2) * detid.disk();
+    }
+    else if (det->subDetector() == GeomDetEnumerators::TIB)
+    {
+      TIBDetId detid(det->geographicalId());
+      layer = detid.layer();
+    }
+    else if (det->subDetector() == GeomDetEnumerators::TOB)
+    {
+      TOBDetId detid(det->geographicalId());
+      layer = detid.layer();
+    }
+    else if (det->subDetector() == GeomDetEnumerators::TID)
+    {
+      TIDDetId detid(det->geographicalId());
+      layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+
+    }
+    else if (det->subDetector() == GeomDetEnumerators::TEC)
+    {
+      TECDetId detid(det->geographicalId());
+      layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+    }
+    
+    for (int j=0; j<4; ++j) {
+      if ( j==1 && !GeomDetEnumerators::isTrackerPixel(det->subDetector()) ) {
+        continue;
+      }
+      auto const& key = std::make_tuple(j, subdet, layer, ieta);
+      keys.insert(key);
+    }
+    
+
+    
+//     detidmap.emplace(std::make_pair(std::make_tuple(ieta, subdet, layer), det->geographicalId()));
+    
+    
+//     if (GeomDetEnumerators::isTracker(det->subDetector())) {
+//       //always have parameters for local x alignment, bfield, and e-loss
+//       detidparms.emplace_back(0, det->geographicalId());
+//       detidparms.emplace_back(2, det->geographicalId());
+//       detidparms.emplace_back(3, det->geographicalId());
+//       if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
+//         //local y alignment parameters only for pixels for now
+//         detidparms.emplace_back(1, det->geographicalId());
+//       }
+//     }
+    
+  }
+  
+  nglobalparmsalignment = 0;
+  nglobalparmsbfield = 0;
+  nglobalparmseloss = 0;
+  
+  std::vector<std::tuple<int, int, int, int> > keysv;
+  for (const auto& key : keys) {
+    keysv.push_back(key);
+    int parmtype = std::get<0>(key);
+    if (parmtype < 2) {
+      nglobalparmsalignment++;
+    }
+    else if (parmtype == 2) {
+      nglobalparmsbfield++;
+    }
+    else if (parmtype == 3) {
+      nglobalparmseloss++;
+    }
+  }
+  std::sort(keysv.begin(), keysv.end());
+  
+  unsigned int badidx = 576;
+  std::cout << "parameter " << badidx << ":" << std::endl;
+  std::cout << std::get<0>(keysv[badidx]) << ", " << std::get<1>(keysv[badidx]) << ", " << std::get<2>(keysv[badidx]) << ", " << std::get<3>(keysv[badidx]) << std::endl;
+  
+  TTree *runtree = new TTree("runtree", "runtree");
+  
+  int iidx;
+  int parmtype;
+  int subdet;
+  int layer;
+  int ieta;
+
+  runtree->Branch("iidx", &iidx);
+  runtree->Branch("parmtype", &parmtype);
+  runtree->Branch("subdet", &subdet);
+  runtree->Branch("layer", &layer);
+  runtree->Branch("ieta", &ieta);
+  
+//   for auto const& key : keysv
+  for (unsigned int i=0; i<keysv.size(); ++i) {
+    iidx = i;
+    auto const& key = keysv[i];
+    parmtype = std::get<0>(key);
+    subdet = std::get<1>(key);
+    layer = std::get<2>(key);
+    ieta = std::get<3>(key);
+    
+    runtree->Fill();
+  }
+  
+
+  for (const GeomDet* det : globalGeometry->dets()) {
+//     printf("GeomDet pointer %p\n", det);
+    if (!det) {
+      continue;
+    }
+    if (!GeomDetEnumerators::isTracker(det->subDetector())) {
+      continue;
+    }
+    int layer = 0;
+    int subdet = det->subDetector();
+    float eta = det->surface().position().eta();
+    int ieta = std::floor(det->surface().position().eta()/0.2);
+
+    if (det->subDetector() == GeomDetEnumerators::PixelBarrel)
+    {
+      PXBDetId detid(det->geographicalId());
+      layer = detid.layer();
+    }
+    else if (det->subDetector() == GeomDetEnumerators::PixelEndcap)
+    {
+      PXFDetId detid(det->geographicalId());
+      layer = -1 * (detid.side() == 1) * detid.disk() + (detid.side() == 2) * detid.disk();
+    }
+    else if (det->subDetector() == GeomDetEnumerators::TIB)
+    {
+      TIBDetId detid(det->geographicalId());
+      layer = detid.layer();
+    }
+    else if (det->subDetector() == GeomDetEnumerators::TOB)
+    {
+      TOBDetId detid(det->geographicalId());
+      layer = detid.layer();
+    }
+    else if (det->subDetector() == GeomDetEnumerators::TID)
+    {
+      TIDDetId detid(det->geographicalId());
+      layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+
+    }
+    else if (det->subDetector() == GeomDetEnumerators::TEC)
+    {
+      TECDetId detid(det->geographicalId());
+      layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+    }
+    
+    for (int j=0; j<4; ++j) {
+      if ( j==1 && !GeomDetEnumerators::isTrackerPixel(det->subDetector()) ) {
+        continue;
+      }
+      auto const& key = std::make_tuple(j, subdet, layer, ieta);
+      detidparms[std::make_pair(j, det->geographicalId())] = std::lower_bound(keysv.begin(),keysv.end(),key)-keysv.begin();
+    }
+    
+//     detidmap.emplace(std::make_pair(std::make_tuple(ieta, subdet, layer), det->geographicalId()));
+    
+    
+//     if (GeomDetEnumerators::isTracker(det->subDetector())) {
+//       //always have parameters for local x alignment, bfield, and e-loss
+//       detidparms.emplace_back(0, det->geographicalId());
+//       detidparms.emplace_back(2, det->geographicalId());
+//       detidparms.emplace_back(3, det->geographicalId());
+//       if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
+//         //local y alignment parameters only for pixels for now
+//         detidparms.emplace_back(1, det->geographicalId());
+//       }
+//     }
+    
+  }
+  
+//   for (const GeomDet* det : globalGeometry->dets()) {
+// //     printf("GeomDet pointer %p\n", det);
+//     if (!det) {
+//       continue;
+//     }
+//     if (!GeomDetEnumerators::isTracker(det->subDetector())) {
+//       continue;
+//     }
+//     
+//     detidparms[det->geographicalId()] = keys.find[detidmap[det->geographicalId()]]-keys.begin();
+//   }
+//   
+  
+  
+//   std::sort(detidparms.begin(), detidparms.end());
+  nglobalparms = keys.size();
+  std::cout << "nglobalparms = " << nglobalparms << std::endl;
+    
+  
 }
-*/
+
 
 // ------------ method called when ending the processing of a run  ------------
 /*
