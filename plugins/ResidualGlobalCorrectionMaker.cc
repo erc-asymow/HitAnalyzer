@@ -1,21 +1,3 @@
-// -*- C++ -*-
-//
-// Package:    TrackAnalysis/HitAnalyzer
-// Class:      HitAnalyzer
-//
-/**\class HitAnalyzer HitAnalyzer.cc TrackAnalysis/HitAnalyzer/plugins/HitAnalyzer.cc
-
- Description: [one line class summary]
-
- Implementation:
-     [Notes on implementation]
-*/
-//
-// Original Author:  Michail Bachtis
-//         Created:  Mon, 21 Mar 2016 14:17:37 GMT
-//
-//
-
 // system include files
 #include <memory>
 
@@ -64,7 +46,9 @@
 #include "TrackingTools/Records/interface/TransientRecHitRecord.h" 
 #include "RecoTracker/TransientTrackingRecHit/interface/TkTransientTrackingRecHitBuilder.h"
 #include "TrackingTools/TrackFitters/interface/TrajectoryStateCombiner.h"
-#include "../interface/OffsetMagneticField.h"
+#include "TrackingTools/PatternTools/interface/TrajTrackAssociation.h"
+// #include "../interface/OffsetMagneticField.h"
+// #include "../interface/ParmInfo.h"
 
 
 #include "TFile.h"
@@ -79,34 +63,16 @@ using namespace Eigen;
 
 constexpr unsigned int max_n = 25; //!< In order to avoid use of dynamic memory
 
-typedef Matrix<double, Dynamic, Dynamic, 0, max_n, max_n> MatrixNd;
-typedef Array<double, Dynamic, Dynamic, 0, max_n, max_n> ArrayNd;
-typedef Matrix<double, Dynamic, Dynamic, 0, 2 * max_n, 2 * max_n> Matrix2Nd;
-typedef Matrix<double, Dynamic, Dynamic, 0, 3 * max_n, 3 * max_n> Matrix3Nd;
-typedef Matrix<double, 2, Dynamic, 0, 2, max_n> Matrix2xNd;
-typedef Array<double, 2, Dynamic, 0, 2, max_n> Array2xNd;
-typedef Matrix<double, 3, Dynamic, 0, 3, max_n> Matrix3xNd;
-typedef Matrix<double, Dynamic, 3, 0, max_n, 3> MatrixNx3d;
-typedef Matrix<double, Dynamic, 5, 0, max_n, 5> MatrixNx5d;
-typedef Matrix<double, Dynamic, 1, 0, max_n, 1> VectorNd;
-typedef Matrix<double, Dynamic, 1, 0, 2 * max_n, 1> Vector2Nd;
-typedef Matrix<double, Dynamic, 1, 0, 3 * max_n, 1> Vector3Nd;
-typedef Matrix<double, 1, Dynamic, 1, 1, max_n> RowVectorNd;
-typedef Matrix<double, 1, Dynamic, 1, 1, 2 * max_n> RowVector2Nd;
-typedef Matrix<double, 2, 2> Matrix2d;
-typedef Matrix<double, 5, 5> Matrix5d;
-typedef Matrix<double, 6, 6> Matrix6d;
-typedef Matrix<double, 5, 6> Matrix56d;
-typedef Matrix<double, 5, 1> Vector5d;
-typedef Matrix<double, 6, 1> Vector6d;
-
-typedef ROOT::Math::SMatrix<double, 2> SMatrix22;
-
 //too big for stack :(
 // typedef Matrix<double, Dynamic, Dynamic, 0, 5*max_n, 5*max_n> GlobalParameterMatrix;
 // typedef Matrix<double, Dynamic, 1, 0, 5*max_n, 1> GlobalParameterVector;
 // typedef Matrix<double, Dynamic, Dynamic, 0, 5*max_n, 2*max_n> AlignmentJacobianMatrix;
 // typedef Matrix<double, Dynamic, Dynamic, 0, 5*max_n, 2*max_n> TransportJacobianMatrix;
+
+typedef Matrix<double, 5, 5> Matrix5d;
+typedef Matrix<double, 5, 1> Vector5d;
+typedef Matrix<float, 5, 5> Matrix5f;
+typedef Matrix<float, 5, 1> Vector5f;
 
 typedef MatrixXd GlobalParameterMatrix;
 typedef VectorXd GlobalParameterVector;
@@ -114,6 +80,18 @@ typedef MatrixXd AlignmentJacobianMatrix;
 typedef MatrixXd TransportJacobianMatrix;
 typedef MatrixXd ELossJacobianMatrix;
 
+
+// struct ParmInfo {
+//   int parmtype;
+//   int subdet;
+//   int layer;
+//   float x;
+//   float y;
+//   float z;
+//   float eta;
+//   float phi;
+//   float rho;
+// };
 
 //
 // class declaration
@@ -138,94 +116,36 @@ private:
   //virtual void endLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
 
   // ----------member data ---------------------------
-  //  edm::EDGetTokenT<reco::TrackCollection>      inputTracks_;
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
-  edm::EDGetTokenT<reco::TrackCollection> inputTrack_;
+  edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
 
   TFile *fout;
   TTree *tree;
-
-  const int N = 25;
-
-  int n;
-  std::vector<float> z;
-  std::vector<float> eta;
-  std::vector<float> phi;
-  std::vector<float> r;
-
-  std::vector<float> xUnc;
-  std::vector<float> yUnc;
-  std::vector<float> zUnc;
-  std::vector<float> etaUnc;
-  std::vector<float> phiUnc;
-  std::vector<float> rUnc;
-
-  std::vector<float> pt;
-
-  std::vector<int> detector;
-  std::vector<int> stereo;
-  std::vector<int> glued;
-  std::vector<int> layer;
-
-  //local positions and errors
-  std::vector<float> localx;
-  std::vector<float> localy;
-  std::vector<float> localz;
-  std::vector<float> localxErr;
-  std::vector<float> localyErr;
-  std::vector<float> localxyErr;
-
-  std::vector<float> globalrErr;
-  std::vector<float> globalzErr;
-  std::vector<float> globalrphiErr;
-  std::vector<float> localx_state;
-  std::vector<float> localy_state;
-
-  //material stuff
-  std::vector<std::vector<double>> trackQ;
-  std::vector<std::vector<double>> trackH;
-  std::vector<std::vector<double>> trackHprop;
-  std::vector<std::vector<double>> trackF;
-  std::vector<std::vector<double>> trackC;
-
-  std::vector<std::vector<double>> updState;
-  std::vector<std::vector<double>> backPropState;
-  std::vector<std::vector<double>> forwardPropState;
-
-  std::vector<std::vector<double>> updStateLocal;
-  std::vector<std::vector<double>> fwdPredStateLocal;
-  std::vector<std::vector<double>> bkgPredStateLocal;
-  
-  std::vector<std::vector<double>> bkgupdPropState;
-  
-  std::vector<std::vector<double>> curvpars;
-  std::vector<int> hitDimension;
-  std::vector<unsigned int> detid;
-  
-  std::vector<double> gradv;
-  std::vector<double> hessv;
-  std::vector<unsigned int> globalidxv;
-  
-//   std::vector<std::pair<int, DetId> > detidparms;
-  std::map<std::pair<int, DetId>, int> detidparms;
 
   float trackEta;
   float trackPhi;
   float trackPt;
   float trackPtErr;
-  float trackZ0;
-  float trackX0;
-  float trackY0;
   float trackCharge;
 
   float genPt;
+  float genEta;
+  float genPhi;
   float genCharge;
-  int ninvalidHits;
-  unsigned int nglobalparms;
-  unsigned int nglobalparmsalignment;
-  unsigned int nglobalparmsbfield;
-  unsigned int nglobalparmseloss;
+  
+  std::array<float, 5> trackParms;
+  std::array<float, 25> trackCov;
+  
+  std::array<float, 5> refParms;
+  std::array<float, 25> refCov;
+  
+  std::vector<float> gradv;
+  std::vector<float> hessv;
+  std::vector<float> jacrefv;
+  std::vector<unsigned int> globalidxv;
+  
+  std::map<std::pair<int, DetId>, unsigned int> detidparms;
 };
 
 //
@@ -243,82 +163,34 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 
 {
   //now do what ever initialization is needed
-  //  inputTracks_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
   GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
-  inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
+  inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
 
-  n = 0;
 
   fout = new TFile("trackTreeGrads.root", "RECREATE");
   tree = new TTree("tree", "tree");
 
-  tree->Branch("n", &n, "n/I");
-  tree->Branch("ninvalidHits", &ninvalidHits, "ninvalidHits/I");
-  tree->Branch("z", &z);
-  tree->Branch("eta", &eta);
-  tree->Branch("phi", &phi);
-  tree->Branch("r", &r);
-  tree->Branch("pt", &pt);
+  tree->Branch("trackPt", &trackPt);
+  tree->Branch("trackPtErr", &trackPtErr);
+  tree->Branch("trackEta", &trackEta);
+  tree->Branch("trackPhi", &trackPhi);
+  tree->Branch("trackCharge", &trackCharge);
+  //workaround for older ROOT version inability to store std::array automatically
+  tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F");
+  tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F");
+  tree->Branch("refParms", refParms.data(), "refParms[5]/F");
+  tree->Branch("refCov", refCov.data(), "refCov[25]/F");
 
-  tree->Branch("xUnc", &xUnc);
-  tree->Branch("yUnc", &yUnc);
-  tree->Branch("zUnc", &zUnc);
-  tree->Branch("etaUnc", &etaUnc);
-  tree->Branch("phiUnc", &phiUnc);
-  tree->Branch("rUnc", &rUnc);
-
-  tree->Branch("stereo", &stereo);
-  tree->Branch("glued", &glued);
-  tree->Branch("detector", &detector);
-  tree->Branch("layer", &layer);
-
-  tree->Branch("trackPt", &trackPt, "trackPt/F");
-  tree->Branch("trackPtErr", &trackPtErr, "trackPtErr/F");
-  tree->Branch("trackEta", &trackEta, "trackEta/F");
-  tree->Branch("trackPhi", &trackPhi, "trackPhi/F");
-  tree->Branch("trackX0", &trackX0, "trackX0/F");
-  tree->Branch("trackY0", &trackY0, "trackY0/F");
-  tree->Branch("trackZ0", &trackZ0, "trackZ0/F");
-  tree->Branch("trackCharge", &trackCharge, "trackCharge/F");
-
-  tree->Branch("genPt", &genPt, "genPt/F");
-  tree->Branch("genCharge", &genCharge, "genCharge/F");
-
-  tree->Branch("localx", &localx);
-  tree->Branch("localy", &localy);
-  tree->Branch("localz", &localz);
-  tree->Branch("localx_state", &localx_state);
-  tree->Branch("localy_state", &localy_state);
-  tree->Branch("localxErr", &localxErr);
-  tree->Branch("localyErr", &localyErr);
-  tree->Branch("localxyErr", &localxyErr);
-  tree->Branch("globalrErr", &globalrErr);
-  tree->Branch("globalzErr", &globalzErr);
-  tree->Branch("globalrphiErr", &globalrphiErr);
-  tree->Branch("trackQ", &trackQ);
-  tree->Branch("trackH", &trackH);
-  tree->Branch("trackHprop", &trackHprop);
-  tree->Branch("trackF", &trackF);
-  tree->Branch("trackC", &trackC);
-  tree->Branch("updState", &updState);
-  tree->Branch("backPropState", &backPropState);
-  tree->Branch("forwardPropState", &forwardPropState);
-  tree->Branch("updStateLocal", &updStateLocal);
-  tree->Branch("fwdPredStateLocal", &fwdPredStateLocal);
-  tree->Branch("bkgPredStateLocal", &bkgPredStateLocal);
-  tree->Branch("bkgupdPropState", &bkgupdPropState);
-  tree->Branch("curvpars", &curvpars);
-  tree->Branch("hitDimension", &hitDimension);
-  tree->Branch("detid", &detid);
+  tree->Branch("genPt", &genPt);
+  tree->Branch("genEta", &genEta);
+  tree->Branch("genPhi", &genPhi);
+  tree->Branch("genCharge", &genCharge);
   
   tree->Branch("gradv", &gradv);
   tree->Branch("hessv", &hessv);
   tree->Branch("globalidxv", &globalidxv);
-  tree->Branch("nglobalparms",&nglobalparms);
-  tree->Branch("nglobalparmsalignment",&nglobalparmsalignment);
-  tree->Branch("nglobalparmsbfield",&nglobalparmsbfield);
-  tree->Branch("nglobalparmseloss",&nglobalparmseloss);
+  tree->Branch("jacrefv",&jacrefv);
 }
 
 ResidualGlobalCorrectionMaker::~ResidualGlobalCorrectionMaker()
@@ -347,81 +219,53 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
 
-  Handle<std::vector<Trajectory>> trajH;
-  iEvent.getByToken(inputTraj_, trajH);
-  
-  Handle<reco::TrackCollection> trackH;
-  iEvent.getByToken(inputTrack_, trackH);
-
   ESHandle<MagneticField> magfield;
   iSetup.get<IdealMagneticFieldRecord>().get(magfield);
   auto field = magfield.product();
   
   edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
   iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
-
-//   OffsetMagneticField offsetField(field, GlobalVector(0.,0.,0.));
   
-  printf("traj size = %i, track size = %i\n", int(trajH->size()), int(trackH->size()));
+  Handle<TrajTrackAssociationCollection> trackH;
+  iEvent.getByToken(inputTrack_, trackH);
   
-  for (unsigned int j = 0; j < trajH->size(); ++j)
-  {
-    printf("j = %i\n", int(j));
+  Handle<std::vector<Trajectory> > trajH;
+  iEvent.getByToken(inputTraj_, trajH);
+  
+  const float mass = 0.105;
+  const float maxDPhi = 1.6;
+  PropagatorWithMaterial rPropagator(oppositeToMomentum, mass, field, maxDPhi, true, -1., false);
+  
+  for (unsigned int j=0; j<trajH->size(); ++j) {
+    const Trajectory& traj = (*trajH)[j];
+    
+    const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
+    const reco::Track& track = *(*trackH)[trajref];
 
-    const Trajectory &traj = (*trajH)[j];
     if (traj.isLooper()) {
       continue;
     }
+    trackPt = track.pt();
+    trackEta = track.eta();
+    trackPhi = track.phi();
+    trackCharge = track.charge();
+    trackPtErr = track.ptError();
     
-    //     const reco::Track& track = (*trackH)[i];
-    //     if (track.lost()>0)
-    //       continue;
-
-//     const reco::Track& track = (*trackH)[j];
-//     trackPt = track.pt();
-//     trackEta = track.eta();
-//     trackPhi = track.phi();
-//     trackCharge = track.charge();
-//     trackPtErr = track.ptError();
+    auto const& tkparms = track.parameters();
+    auto const& tkcov = track.covariance();
+    trackParms.fill(0.);
+    trackCov.fill(0.);
+    //use eigen to fill raw memory
+    Map<Vector5f>(trackParms.data()) = Map<const Vector5d>(tkparms.Array()).cast<float>();
+    Map<Matrix<float, 5, 5, RowMajor> >(trackCov.data()).triangularView<Upper>() = Map<const Matrix<double, 5, 5, RowMajor> >(tkcov.Array()).cast<float>().triangularView<Upper>();
     
-    const std::vector<TrajectoryMeasurement> &tms = (*trajH)[j].measurements();
-
+    const std::vector<TrajectoryMeasurement> &tms = traj.measurements();
     
-    ////
-
-    if (((*trajH)[j].direction()) == alongMomentum)
-    {
-
-      TrajectoryStateOnSurface measurement = (*trajH)[j].firstMeasurement().updatedState();
-
-      trackPt = measurement.globalMomentum().perp();
-      //FIX BUG
-      trackPtErr = sqrt(measurement.curvilinearError().matrix()[0][0]) * trackPt;
-
-      trackEta = measurement.globalMomentum().eta();
-      trackPhi = measurement.globalMomentum().phi();
-      trackX0 = measurement.globalPosition().x();
-      trackY0 = measurement.globalPosition().y();
-      trackZ0 = measurement.globalPosition().z();
-      trackCharge = measurement.charge();
-    }
-    else
-    {
-
-      TrajectoryStateOnSurface measurement = (*trajH)[j].lastMeasurement().updatedState();
-
-      trackPt = measurement.globalMomentum().perp();
-      trackPtErr = sqrt(measurement.curvilinearError().matrix()[0][0]) * trackPt;
-      trackEta = measurement.globalMomentum().eta();
-      trackPhi = measurement.globalMomentum().phi();
-      trackX0 = measurement.globalPosition().x();
-      trackY0 = measurement.globalPosition().y();
-      trackZ0 = measurement.globalPosition().z();
-      trackCharge = measurement.charge();
-    }
-
-    //     printf("First point %f %f %f  - %f %f %f\n",trackX0,trackY0,trackZ0,trackPt,trackEta,trackPhi);
-
+    //TODO compute also dxy, dz/dsz for gen particle wrt reco::Beamspot for direct comparison to reconstructed quantities
+    genPt = -99.;
+    genEta = -99.;
+    genPhi = -99.;
+    genCharge = -99;
     for (std::vector<reco::GenParticle>::const_iterator g = genParticles.begin(); g != genParticles.end(); ++g)
     {
 
@@ -430,90 +274,21 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       if (dR < 0.15)
       {
         genPt = g->pt();
+        genEta = g->eta();
+        genPhi = g->phi();
         genCharge = g->charge();
       }
-      else
+      else {
         continue;
+      }
     }
-
-    ////
-    n = 0;
-    ninvalidHits = 0;
-
-    z.clear();
-    eta.clear();
-    phi.clear();
-    r.clear();
-
-    xUnc.clear();
-    yUnc.clear();
-    zUnc.clear();
-    etaUnc.clear();
-    phiUnc.clear();
-    rUnc.clear();
-
-    pt.clear();
-
-    detector.clear();
-    stereo.clear();
-    glued.clear();
-    layer.clear();
-
-    //local positions and errors
-    localx.clear();
-    localy.clear();
-    localz.clear();
-    localxErr.clear();
-    localyErr.clear();
-    localxyErr.clear();
-
-    localx_state.clear();
-    localy_state.clear();
-
-    globalrErr.clear();
-    globalzErr.clear();
-    globalrphiErr.clear();
-
-    updState.clear();
-    backPropState.clear();
-    forwardPropState.clear();
-
-    updStateLocal.clear();
-    fwdPredStateLocal.clear();
-    bkgPredStateLocal.clear();
-    
-    bkgupdPropState.clear();
-    
-    //material stuff
-    trackQ.clear();
-    trackH.clear();
-    trackF.clear();
-    trackC.clear();
-    trackHprop.clear();
-    
-    hitDimension.clear();
-    detid.clear();
-
-//     const float mass = 0.1395703;
-    const float mass = 0.105;
-    const float maxDPhi = 1.6;
-//     printf("traj propdir = %i\n", int((*trajH)[j].direction()));
     
 
-    PropagationDirection rpropdir = (*trajH)[j].direction();
+    PropagationDirection rpropdir = traj.direction();
     PropagationDirection fpropdir = rpropdir == alongMomentum ? oppositeToMomentum : alongMomentum;
     
     //TODO properly handle the outside-in case
     assert(fpropdir == alongMomentum);
-    
-    
-//     PropagatorWithMaterial rPropagator(rpropdir, mass, &offsetField, maxDPhi, true, -1., false);
-    PropagatorWithMaterial rPropagator(rpropdir, mass, field, maxDPhi, true, -1., false);
-//     PropagatorWithMaterial fPropagator(fpropdir, mass, field, maxDPhi, true, -1., false);
-    
-//     KFSwitching1DUpdator updator;
-    KFUpdator updator;
-    TrajectoryStateCombiner combiner;
     
     const unsigned int nhits = tms.size();    
     unsigned int npixhits = 0;
@@ -535,9 +310,6 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     const unsigned int nparsEloss = nhits - 1;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
     
-//     VectorNd grad = VectorNd::Zero(npars);
-//     MatrixNd hess = MatrixNd::Zero(npars,npars);
-    
     //curvilinear to local jacobian (at two points)
     GlobalParameterMatrix H = GlobalParameterMatrix::Zero(5*nhits, 5*nhits);
     GlobalParameterMatrix Hprop = GlobalParameterMatrix::Zero(5*nhits, 5*nhits);
@@ -550,7 +322,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //propagation jacobian with respect to b-field
     TransportJacobianMatrix dF = TransportJacobianMatrix::Zero(5*nhits, nparsBfield);
     //energy loss jacobian wrt energy loss
-    ELossJacobianMatrix dE = GlobalParameterMatrix::Zero(5*nhits, nparsEloss);
+    ELossJacobianMatrix dE = ELossJacobianMatrix::Zero(5*nhits, nparsEloss);
 //     //identity matrix
 //     GlobalParameterMatrix const I = GlobalParameterMatrix::Identity(5*nhits, 5*nhits);
     
@@ -565,18 +337,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     GlobalParameterVector dx0 = GlobalParameterVector::Zero(5*nhits);
     
     
-    gradv.clear();
-    hessv.clear();
     globalidxv.clear();
-    
     globalidxv.resize(npars, 0);
-    gradv.resize(npars,0.);
-    hessv.resize(npars*npars, 0.);
-
-    //eigen representation of the underlying vector storage
-    Map<GlobalParameterVector> grad(gradv.data(), npars);
-    Map<GlobalParameterMatrix> hess(hessv.data(), npars, npars);
-
     
     unsigned int alignmentidx = 0;
     unsigned int bfieldidx = 0;
@@ -599,6 +361,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
         //check for 2d hits
         if (hit->dimension()>1) {
+          //fill y residual
+          dy0(5*i+4) = hit->localPosition().y() - updtsos.localPosition().y();
+          
           //compute 2x2 covariance matrix and invert
           Matrix2d iV;
           iV << hit->localPositionError().xx(), hit->localPositionError().xy(),
@@ -623,16 +388,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       bool ispixel = GeomDetEnumerators::isTrackerPixel(detectorG->subDetector());
       //2d alignment correction for pixel hits, otherwise 1d
       A(5*i+3, alignmentidx) = 1.;
-//       const unsigned int xglobalidx = std::lower_bound(detidparms.begin(), detidparms.end(), std::make_pair(0,hit->geographicalId())) - detidparms.begin();
-      const unsigned int xglobalidx = detidparms[std::make_pair(0,hit->geographicalId())];
-//       assert(xglobalidx<detidparms.size());
+      const unsigned int xglobalidx = detidparms.at(std::make_pair(0,hit->geographicalId()));
       globalidxv[alignmentidx] = xglobalidx;
       alignmentidx++;
       if (ispixel) {
         A(5*i+4, alignmentidx) = 1.;
-//         const unsigned int yglobalidx = std::lower_bound(detidparms.begin(), detidparms.end(), std::make_pair(1,hit->geographicalId())) - detidparms.begin();
-        const unsigned int yglobalidx = detidparms[std::make_pair(1,hit->geographicalId())];
-//         assert(yglobalidx<detidparms.size());
+        const unsigned int yglobalidx = detidparms.at(std::make_pair(1,hit->geographicalId()));
         globalidxv[alignmentidx] = yglobalidx;
         alignmentidx++;
       }
@@ -644,8 +405,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         //compute transport jacobian propagating outside in to current layer
         TrajectoryStateOnSurface const& toproptsos = tms[i-1].updatedState();
         
-        //no offset for nominal propagation
-        const auto &propresult = rPropagator.geometricalPropagator().propagateWithPath(toproptsos, updtsos.surface());
+        auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(toproptsos, updtsos.surface());
         AnalyticalCurvilinearJacobian curvjac(toproptsos.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), propresult.second);
         const AlgebraicMatrix55 &jacF = curvjac.jacobian();
         
@@ -697,9 +457,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
 //         std::cout << "dF = " << dF.block<5,1>(5*i, bfieldidx) << std::endl;
         
-//         const unsigned int bfieldglobalidx = std::lower_bound(detidparms.begin(), detidparms.end(), std::make_pair(2,hit->geographicalId())) - detidparms.begin();
-//         assert(bfieldglobalidx<detidparms.size());
-        const unsigned int bfieldglobalidx = detidparms[std::make_pair(2,hit->geographicalId())];
+        const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,hit->geographicalId()));
         globalidxv[nparsAlignment + bfieldidx] = bfieldglobalidx;
         bfieldidx++;
         
@@ -774,9 +532,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
         //derivative of the energy loss with respect to the energy loss parameter xi
         dE(5*i, elossidx) = res_3;
-//         const unsigned int elossglobalidx = std::lower_bound(detidparms.begin(), detidparms.end(), std::make_pair(3,hit->geographicalId())) - detidparms.begin();
-//         assert(elossglobalidx<detidparms.size());
-        const unsigned int elossglobalidx = detidparms[std::make_pair(3,hit->geographicalId())];        
+        const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
         globalidxv[nparsAlignment + nparsBfield + elossidx] = elossglobalidx;
         elossidx++;
 
@@ -796,53 +552,112 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         std::cout << "Qinv" << std::endl;        
 //         std::cout << Qinv.block<5,5>(5*i, 5*i) << std::endl; 
 
-        
-        //TODO compute G
-        
+                
       }
 
     }
     
-    //now do the expensive calculations
+    auto const& refpoint = track.referencePoint();
+    auto const& trackmom = track.momentum();
+    
+    //propagate inner state back to the reference point of the track and compute transport jacobian
+    //by constructing a dummy surface at the track reference point
+    const Surface::PositionType pos(refpoint.x(), refpoint.y(), refpoint.z());
+    const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z());
+    const GlobalVector ux = refmom.cross(GlobalVector(0.,0.,1.));
+    const GlobalVector uy = ux.cross(refmom);
+    
+    const Surface::RotationType rot(ux, uy);
+    const ReferenceCountingPointer<Plane> surface = Plane::build(pos, rot);
+    
+    const TrajectoryStateOnSurface& toproptsos = tms.back().updatedState();
+    auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(toproptsos, *surface);
+    const CurvilinearTrajectoryParameters refCurv(propresult.first.globalPosition(), propresult.first.globalMomentum(), propresult.first.charge());
+    const AlgebraicVector5& refVec = refCurv.vector();
+    
+    AnalyticalCurvilinearJacobian curvjac(toproptsos.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), propresult.second);
+    const AlgebraicMatrix55& jacF = curvjac.jacobian();
+    Map<const Matrix<double, 5, 5, RowMajor> > Fref(jacF.Array());
+    
+    //now do the expensive calculations and fill outputs
+    
+    gradv.clear();
+    hessv.clear();
+    jacrefv.clear();
+
+    gradv.resize(npars,0.);
+    hessv.resize(npars*npars, 0.);
+    jacrefv.resize(5*npars, 0.);
+
+    //eigen representation of the underlying vector storage
+    Map<VectorXf> grad(gradv.data(), npars);
+    Map<Matrix<float, Dynamic, Dynamic, RowMajor> > hess(hessv.data(), npars, npars);
+    Map<Matrix<float, 5, Dynamic, RowMajor> > jacref(jacrefv.data(), 5, npars);
     
     //expressions for gradients semi-automatically generated with sympy
-    const GlobalParameterMatrix C = (2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H) + 2*H.transpose()*Vinv*H).ldlt().solve(GlobalParameterMatrix::Identity(5*nhits,5*nhits));
-  
+
+    //compute robust cholesky decomposition of inverse covariance matrix
+    auto const& Cinvldlt = (2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H) + 2*H.transpose()*Vinv*H).ldlt();
+    
+    //compute covariance matrix explicitly to simplify below expressions
+    //TODO avoid this by replacing matrix multiplications with C with the appropriate ldlt solve operations in the gradients below
+    const GlobalParameterMatrix C = Cinvldlt.solve(GlobalParameterMatrix::Identity(5*nhits,5*nhits));
+    
+    //compute shift in parameters at reference point from matrix model given hit and kink residuals
+    //(but for nominal values of the model correction
+    Vector5d dxRef = Fref*Cinvldlt.solve(-2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 + 2*H.transpose()*Vinv*dy0).tail<5>();
+    
+    //fill output with corrected state and covariance at reference point
+    refParms.fill(0.);
+    refCov.fill(0.);
+    Map<Vector5f>(refParms.data()) = (Map<const Vector5d>(refVec.Array()) + dxRef).cast<float>();
+    Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Fref*C.bottomRightCorner<5,5>()*Fref.transpose()).cast<float>().triangularView<Upper>();
+    
+    //set jacobian for reference point parameters
+    jacref.leftCols(nparsAlignment) = (-2*Fref*Cinvldlt.solve(H.transpose()*Vinv*A).bottomRows<5>()).cast<float>();
+
+    jacref.block<5, Dynamic>(0, nparsAlignment, 5, nparsBfield) = (2*Fref*Cinvldlt.solve((-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF).bottomRows<5>()).cast<float>();
+    
+    jacref.rightCols(nparsEloss) = (2*Fref*Cinvldlt.solve((-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE).bottomRows<5>()).cast<float>();
+    
+//     std::cout << "jacref:" << std::endl;
+//     std::cout << jacref << std::endl;
+    
     //set gradients
-    grad.head(nparsAlignment) = -2*A.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0) - 4*A.transpose()*Vinv*H*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*A.transpose()*Vinv*H*C.transpose()*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0);
+    grad.head(nparsAlignment) = (-2*A.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0) - 4*A.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*A.transpose()*Vinv*H*C*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0)).cast<float>();
+
+    grad.segment(nparsAlignment,nparsBfield) = (-2*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) - 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0)).cast<float>();
     
-    grad.segment(nparsAlignment,nparsBfield) = -2*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) - 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0);
+    grad.tail(nparsEloss) = (-2*dE.transpose()*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) - 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0)).cast<float>();
     
-    grad.tail(nparsEloss) = -2*dE.transpose()*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) - 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0);
+    //fill hessian (diagonal blocks, upper triangular part only)
+    hess.topLeftCorner(nparsAlignment, nparsAlignment).triangularView<Upper>() = (2*A.transpose()*Vinv*A + 8*A.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 8*A.transpose()*Vinv*H*C*H.transpose()*Vinv*A + 8*A.transpose()*Vinv*H*C*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A).cast<float>().triangularView<Upper>();
     
-    //fill hessian (diagonal blocks)
-    hess.topLeftCorner(nparsAlignment, nparsAlignment) = 2*A.transpose()*Vinv*A - 4*A.transpose()*Vinv*H*C*H.transpose()*Vinv*A + 8*A.transpose()*Vinv*H*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 4*A.transpose()*Vinv*H*C.transpose()*H.transpose()*Vinv*A + 8*A.transpose()*Vinv*H*C.transpose()*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A;
+    hess.block(nparsAlignment, nparsAlignment, nparsBfield, nparsBfield).triangularView<Upper>() = (8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF - 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 2*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*E*Hprop*dF).cast<float>().triangularView<Upper>();
     
-    hess.block(nparsAlignment, nparsAlignment, nparsBfield, nparsBfield) = -4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF - 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 2*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*E*Hprop*dF;
+    hess.bottomRightCorner(nparsEloss,nparsEloss).triangularView<Upper>() = (8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE + 2*dE.transpose()*Qinv*dE).cast<float>().triangularView<Upper>();
     
-    hess.bottomRightCorner(nparsEloss,nparsEloss) = -4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE - 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE + 2*dE.transpose()*Qinv*dE;
+    //fill hessian off-diagonal blocks (upper triangular part)
+    hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = (-8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A + 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A).cast<float>();
     
-    //fill hessian off-diagonal blocks (lower triangular part)
-    hess.block(nparsAlignment, 0, nparsBfield, nparsAlignment) = 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A + 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*A - 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A;
-    
-    hess.block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A + 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A;
+    hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = (-8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A).cast<float>();
     
     //careful this is easy to screw up because it is "accidentally" symmetric
-    hess.block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = -4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF - 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C.transpose()*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 2*dE.transpose()*Qinv*E*Hprop*dF;
+    hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = (8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 2*dE.transpose()*Qinv*E*Hprop*dF).cast<float>();
     
-    //fill upper triangular blocks
-    hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = hess.block(nparsAlignment, 0, nparsBfield, nparsAlignment);
-    
-    hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = hess.block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment);
-    
-    hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = hess.block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield);
+//     //fill upper triangular blocks
+//     hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = hess.block(nparsAlignment, 0, nparsBfield, nparsAlignment);
+//     
+//     hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = hess.block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment);
+//     
+//     hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = hess.block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield);
     
 //     std::cout << Qinv << std::endl;
-    std::cout << "Recomputed innner covariance:" << std::endl;
-    std::cout << 2.*C.bottomRightCorner<5,5>() << std::endl;
-    
-    std::cout << "KF innner covariance:" << std::endl;
-    std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
+//     std::cout << "Recomputed innner covariance:" << std::endl;
+//     std::cout << 2.*C.bottomRightCorner<5,5>() << std::endl;
+//     
+//     std::cout << "KF innner covariance:" << std::endl;
+//     std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
 
     tree->Fill();
   }
@@ -871,21 +686,61 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
   
   detidparms.clear();
   
-//   std::map<std::pair<int,DetId>, std::tuple<int, int, int, int> > detidmap;
-  std::set<std::tuple<int, int, int, int> > keys;
+  std::set<std::pair<int, DetId> > parmset;
   
   for (const GeomDet* det : globalGeometry->dets()) {
-//     printf("GeomDet pointer %p\n", det);
     if (!det) {
       continue;
     }
-    if (!GeomDetEnumerators::isTracker(det->subDetector())) {
-      continue;
+    if (GeomDetEnumerators::isTracker(det->subDetector())) {
+      //always have parameters for local x alignment, bfield, and e-loss
+      parmset.emplace(0, det->geographicalId());
+      parmset.emplace(2, det->geographicalId());
+      parmset.emplace(3, det->geographicalId());
+      if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
+        //local y alignment parameters only for pixels for now
+        parmset.emplace(1, det->geographicalId());
+      }
     }
-    int layer = 0;
-    int subdet = det->subDetector();
-    float eta = det->surface().position().eta();
-    int ieta = std::floor(det->surface().position().eta()/0.2);
+  }
+  
+  TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
+  TTree *runtree = new TTree("tree", "tree");
+  
+  unsigned int iidx;
+  int parmtype;
+  unsigned int rawdetid;
+  int subdet;
+  int layer;
+  float x;
+  float y;
+  float z;
+  float eta;
+  float phi;
+  float rho;
+
+  runtree->Branch("iidx", &iidx);
+  runtree->Branch("parmtype", &parmtype);
+  runtree->Branch("rawdetid", &rawdetid);
+  runtree->Branch("subdet", &subdet);
+  runtree->Branch("layer", &layer);
+  runtree->Branch("x", &x);
+  runtree->Branch("y", &y);
+  runtree->Branch("z", &z);
+  runtree->Branch("eta", &eta);
+  runtree->Branch("phi", &phi);
+  runtree->Branch("rho", &rho);
+  
+  unsigned int globalidx = 0;
+  for (const auto& key: parmset) {
+    
+    //fill info
+    const DetId& detid = key.second;
+    const GeomDet* det = globalGeometry->idToDet(detid);
+    
+    layer = 0;
+//     int subdet = det->subDetector();
+//     float eta = det->surface().position().eta();
 
     if (det->subDetector() == GeomDetEnumerators::PixelBarrel)
     {
@@ -919,169 +774,41 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
     }
     
-    for (int j=0; j<4; ++j) {
-      if ( j==1 && !GeomDetEnumerators::isTrackerPixel(det->subDetector()) ) {
-        continue;
-      }
-      auto const& key = std::make_tuple(j, subdet, layer, ieta);
-      keys.insert(key);
-    }
-    
+//     ParmInfo parminfo;
+//     parminfo.parmtype = key.first;
+//     parminfo.subdet = det->subDetector();
+//     parminfo.layer = layer;
+//     parminfo.x = det->surface().position().x();
+//     parminfo.y = det->surface().position().y();
+//     parminfo.z = det->surface().position().z();
+//     parminfo.eta = det->surface().position().eta();
+//     parminfo.phi = det->surface().position().phi();
+//     parminfo.rho = det->surface().position().perp();
 
+    iidx = globalidx;
+    parmtype = key.first;
+    rawdetid = detid;
+    subdet = det->subDetector();
+    //layer already set above
+    x = det->surface().position().x();
+    y = det->surface().position().y();
+    z = det->surface().position().z();
+    eta = det->surface().position().eta();
+    phi = det->surface().position().phi();
+    rho = det->surface().position().perp();
     
-//     detidmap.emplace(std::make_pair(std::make_tuple(ieta, subdet, layer), det->geographicalId()));
-    
-    
-//     if (GeomDetEnumerators::isTracker(det->subDetector())) {
-//       //always have parameters for local x alignment, bfield, and e-loss
-//       detidparms.emplace_back(0, det->geographicalId());
-//       detidparms.emplace_back(2, det->geographicalId());
-//       detidparms.emplace_back(3, det->geographicalId());
-//       if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
-//         //local y alignment parameters only for pixels for now
-//         detidparms.emplace_back(1, det->geographicalId());
-//       }
-//     }
-    
-  }
-  
-  nglobalparmsalignment = 0;
-  nglobalparmsbfield = 0;
-  nglobalparmseloss = 0;
-  
-  std::vector<std::tuple<int, int, int, int> > keysv;
-  for (const auto& key : keys) {
-    keysv.push_back(key);
-    int parmtype = std::get<0>(key);
-    if (parmtype < 2) {
-      nglobalparmsalignment++;
-    }
-    else if (parmtype == 2) {
-      nglobalparmsbfield++;
-    }
-    else if (parmtype == 3) {
-      nglobalparmseloss++;
-    }
-  }
-  std::sort(keysv.begin(), keysv.end());
-  
-  unsigned int badidx = 576;
-  std::cout << "parameter " << badidx << ":" << std::endl;
-  std::cout << std::get<0>(keysv[badidx]) << ", " << std::get<1>(keysv[badidx]) << ", " << std::get<2>(keysv[badidx]) << ", " << std::get<3>(keysv[badidx]) << std::endl;
-  
-  TTree *runtree = new TTree("runtree", "runtree");
-  
-  int iidx;
-  int parmtype;
-  int subdet;
-  int layer;
-  int ieta;
-
-  runtree->Branch("iidx", &iidx);
-  runtree->Branch("parmtype", &parmtype);
-  runtree->Branch("subdet", &subdet);
-  runtree->Branch("layer", &layer);
-  runtree->Branch("ieta", &ieta);
-  
-//   for auto const& key : keysv
-  for (unsigned int i=0; i<keysv.size(); ++i) {
-    iidx = i;
-    auto const& key = keysv[i];
-    parmtype = std::get<0>(key);
-    subdet = std::get<1>(key);
-    layer = std::get<2>(key);
-    ieta = std::get<3>(key);
+    //fill map
+    detidparms.emplace(key, globalidx);
+    globalidx++;
     
     runtree->Fill();
   }
   
-
-  for (const GeomDet* det : globalGeometry->dets()) {
-//     printf("GeomDet pointer %p\n", det);
-    if (!det) {
-      continue;
-    }
-    if (!GeomDetEnumerators::isTracker(det->subDetector())) {
-      continue;
-    }
-    int layer = 0;
-    int subdet = det->subDetector();
-    float eta = det->surface().position().eta();
-    int ieta = std::floor(det->surface().position().eta()/0.2);
-
-    if (det->subDetector() == GeomDetEnumerators::PixelBarrel)
-    {
-      PXBDetId detid(det->geographicalId());
-      layer = detid.layer();
-    }
-    else if (det->subDetector() == GeomDetEnumerators::PixelEndcap)
-    {
-      PXFDetId detid(det->geographicalId());
-      layer = -1 * (detid.side() == 1) * detid.disk() + (detid.side() == 2) * detid.disk();
-    }
-    else if (det->subDetector() == GeomDetEnumerators::TIB)
-    {
-      TIBDetId detid(det->geographicalId());
-      layer = detid.layer();
-    }
-    else if (det->subDetector() == GeomDetEnumerators::TOB)
-    {
-      TOBDetId detid(det->geographicalId());
-      layer = detid.layer();
-    }
-    else if (det->subDetector() == GeomDetEnumerators::TID)
-    {
-      TIDDetId detid(det->geographicalId());
-      layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
-
-    }
-    else if (det->subDetector() == GeomDetEnumerators::TEC)
-    {
-      TECDetId detid(det->geographicalId());
-      layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
-    }
-    
-    for (int j=0; j<4; ++j) {
-      if ( j==1 && !GeomDetEnumerators::isTrackerPixel(det->subDetector()) ) {
-        continue;
-      }
-      auto const& key = std::make_tuple(j, subdet, layer, ieta);
-      detidparms[std::make_pair(j, det->geographicalId())] = std::lower_bound(keysv.begin(),keysv.end(),key)-keysv.begin();
-    }
-    
-//     detidmap.emplace(std::make_pair(std::make_tuple(ieta, subdet, layer), det->geographicalId()));
-    
-    
-//     if (GeomDetEnumerators::isTracker(det->subDetector())) {
-//       //always have parameters for local x alignment, bfield, and e-loss
-//       detidparms.emplace_back(0, det->geographicalId());
-//       detidparms.emplace_back(2, det->geographicalId());
-//       detidparms.emplace_back(3, det->geographicalId());
-//       if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
-//         //local y alignment parameters only for pixels for now
-//         detidparms.emplace_back(1, det->geographicalId());
-//       }
-//     }
-    
-  }
-  
-//   for (const GeomDet* det : globalGeometry->dets()) {
-// //     printf("GeomDet pointer %p\n", det);
-//     if (!det) {
-//       continue;
-//     }
-//     if (!GeomDetEnumerators::isTracker(det->subDetector())) {
-//       continue;
-//     }
-//     
-//     detidparms[det->geographicalId()] = keys.find[detidmap[det->geographicalId()]]-keys.begin();
-//   }
-//   
-  
+  runfout->Write();
+  runfout->Close();
   
 //   std::sort(detidparms.begin(), detidparms.end());
-  nglobalparms = keys.size();
-  std::cout << "nglobalparms = " << nglobalparms << std::endl;
+  std::cout << "nglobalparms = " << detidparms.size() << std::endl;
     
   
 }
