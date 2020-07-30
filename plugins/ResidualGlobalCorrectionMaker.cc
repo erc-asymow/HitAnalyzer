@@ -119,6 +119,7 @@ private:
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
+  edm::EDGetTokenT<reco::BeamSpot> inputBs_;
 
   TFile *fout;
   TTree *tree;
@@ -139,6 +140,8 @@ private:
   
   std::array<float, 5> refParms;
   std::array<float, 25> refCov;
+  
+  std::array<float, 5> genParms;
   
   std::vector<float> gradv;
   std::vector<float> hessv;
@@ -166,6 +169,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
   GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
   inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
+  inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
 
   fout = new TFile("trackTreeGrads.root", "RECREATE");
@@ -181,6 +185,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F");
   tree->Branch("refParms", refParms.data(), "refParms[5]/F");
   tree->Branch("refCov", refCov.data(), "refCov[25]/F");
+  tree->Branch("genParms", genParms.data(), "genParms[5]/F");
 
   tree->Branch("genPt", &genPt);
   tree->Branch("genEta", &genEta);
@@ -232,6 +237,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   Handle<std::vector<Trajectory> > trajH;
   iEvent.getByToken(inputTraj_, trajH);
   
+  Handle<reco::BeamSpot> bsH;
+  iEvent.getByToken(inputBs_, bsH);
+  
+  const reco::BeamSpot& bs = *bsH;
+  
   const float mass = 0.105;
   const float maxDPhi = 1.6;
   PropagatorWithMaterial rPropagator(oppositeToMomentum, mass, field, maxDPhi, true, -1., false);
@@ -266,6 +276,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     genEta = -99.;
     genPhi = -99.;
     genCharge = -99;
+    genParms.fill(0.);
     for (std::vector<reco::GenParticle>::const_iterator g = genParticles.begin(); g != genParticles.end(); ++g)
     {
 
@@ -277,6 +288,21 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         genEta = g->eta();
         genPhi = g->phi();
         genCharge = g->charge();
+        
+        auto const& vtx = g->vertex();
+        auto const& myBeamSpot = bs.position(vtx.z());
+        
+        //q/|p|
+        genParms[0] = g->charge()/g->p();
+        //lambda
+        genParms[1] = M_PI_2 - g->momentum().theta();
+        //phi
+        genParms[2] = g->phi();
+        //dxy
+        genParms[3] = (-(vtx.x() - myBeamSpot.x()) * g->py() + (vtx.y() - myBeamSpot.y()) * g->px()) / g->pt();
+        //dsz
+        genParms[4] = (vtx.z() - myBeamSpot.z()) * g->pt() / g->p() -
+           ((vtx.x() - myBeamSpot.x()) * g->px() + (vtx.y() - myBeamSpot.y()) * g->py()) / g->pt() * g->pz() / g->p();
       }
       else {
         continue;
@@ -399,12 +425,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       }
 
       
-      if (i >0) {
-        //TODO check consistency of propagation jacobians when propagating oppositeToMomentum!!!
-        
+      if (i >0) {        
         //compute transport jacobian propagating outside in to current layer
         TrajectoryStateOnSurface const& toproptsos = tms[i-1].updatedState();
         
+        //n.b. the returned pathlength is negative when propagating oppositeToMomentum, and this ensures the correct
+        //results for the transport Jacobians
         auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(toproptsos, updtsos.surface());
         AnalyticalCurvilinearJacobian curvjac(toproptsos.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), propresult.second);
         const AlgebraicMatrix55 &jacF = curvjac.jacobian();
@@ -417,18 +443,18 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const AlgebraicVector3 b(toproptsos.globalParameters().magneticFieldInInverseGeV().x(),
                            toproptsos.globalParameters().magneticFieldInInverseGeV().y(),
                            toproptsos.globalParameters().magneticFieldInInverseGeV().z());
-        double magb = ROOT::Math::Dot(b,b);
+        double magb = std::sqrt(ROOT::Math::Dot(b,b));
         const AlgebraicVector3 h = b/magb;
 
         const AlgebraicVector3 p0(toproptsos.globalParameters().momentum().x(),
                             toproptsos.globalParameters().momentum().y(),
                             toproptsos.globalParameters().momentum().z());
-        double p = ROOT::Math::Dot(p0,p0);
+        double p = std::sqrt(ROOT::Math::Dot(p0,p0));
         const AlgebraicVector3 T0 = p0/p;
         double q = toproptsos.charge();
         
         const AlgebraicVector3 hcrossT0 = ROOT::Math::Cross(h,T0);
-        double alpha = ROOT::Math::Dot(hcrossT0,hcrossT0);
+        double alpha = std::sqrt(ROOT::Math::Dot(hcrossT0,hcrossT0));
         const AlgebraicVector3 N0 = hcrossT0/alpha;
         double gamma = ROOT::Math::Dot(h,T0);
         double s = propresult.second;
