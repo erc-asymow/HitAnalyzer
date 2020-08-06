@@ -154,8 +154,6 @@ private:
   std::vector<unsigned int> globalidxv;
   
   std::vector<float> hesspackedv;
-  std::vector<unsigned int> iidxhesspackedv;
-  std::vector<unsigned int> jidxhesspackedv;
   
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
   
@@ -219,8 +217,6 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   tree->Branch("nSym", &nSym, basketSize);
   
   tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
-  tree->Branch("iidxhesspackedv", iidxhesspackedv.data(), "iidxhesspackedv[nSym]/i", basketSize);
-  tree->Branch("jidxhesspackedv", jidxhesspackedv.data(), "jidxhesspackedv[nSym]/i", basketSize);
 
 }
 
@@ -725,33 +721,21 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     //fill packed hessian and indices
     const unsigned int nsym = npars*(1+npars)/2;
-    hesspackedv.clear();
-    iidxhesspackedv.clear();
-    jidxhesspackedv.clear();
-    
+    hesspackedv.clear();    
     hesspackedv.resize(nsym, 0.);
-    iidxhesspackedv.resize(nsym, 0);
-    jidxhesspackedv.resize(nsym, 0);
     
     nSym =nsym;
     tree->SetBranchAddress("hesspackedv", hesspackedv.data());
-    tree->SetBranchAddress("iidxhesspackedv", iidxhesspackedv.data());
-    tree->SetBranchAddress("jidxhesspackedv", jidxhesspackedv.data());
     
     Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
     const Map<const VectorXu> globalidx(globalidxv.data(), npars);
-    Map<VectorXu> iidxhesspacked(iidxhesspackedv.data(), nsym);
-    Map<VectorXu> jidxhesspacked(jidxhesspackedv.data(), nsym);
 
     unsigned int packedidx = 0;
     for (unsigned int ipar = 0; ipar < npars; ++ipar) {
       const unsigned int segmentsize = npars - ipar;
       hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize);
-      iidxhesspacked.segment(packedidx, segmentsize).setConstant(globalidx[ipar]);
-      jidxhesspacked.segment(packedidx, segmentsize) = globalidx.tail(segmentsize);
       packedidx += segmentsize;
     }
-    
 
     tree->Fill();
   }
