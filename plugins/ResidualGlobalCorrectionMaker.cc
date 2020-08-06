@@ -74,6 +74,7 @@ typedef Matrix<double, 5, 1> Vector5d;
 typedef Matrix<double, 6, 1> Vector6d;
 typedef Matrix<float, 5, 5> Matrix5f;
 typedef Matrix<float, 5, 1> Vector5f;
+typedef Matrix<unsigned int, Dynamic, 1> VectorXu;
 
 typedef MatrixXd GlobalParameterMatrix;
 typedef VectorXd GlobalParameterVector;
@@ -136,6 +137,10 @@ private:
   float genPhi;
   float genCharge;
   
+  unsigned int nParms;
+  unsigned int nJacRef;
+  unsigned int nSym;
+  
   std::array<float, 5> trackParms;
   std::array<float, 25> trackCov;
   
@@ -145,11 +150,15 @@ private:
   std::array<float, 5> genParms;
   
   std::vector<float> gradv;
-  std::vector<float> hessv;
   std::vector<float> jacrefv;
   std::vector<unsigned int> globalidxv;
   
+  std::vector<float> hesspackedv;
+  std::vector<unsigned int> iidxhesspackedv;
+  std::vector<unsigned int> jidxhesspackedv;
+  
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
+  
 };
 
 //
@@ -174,29 +183,45 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 
 
   fout = new TFile("trackTreeGrads.root", "RECREATE");
+  //TODO this needs a newer root version
+//   fout->SetCompressionAlgorithm(ROOT::kLZ4);
+//   fout->SetCompressionLevel(3);
   tree = new TTree("tree", "tree");
-
-  tree->Branch("trackPt", &trackPt);
-  tree->Branch("trackPtErr", &trackPtErr);
-  tree->Branch("trackEta", &trackEta);
-  tree->Branch("trackPhi", &trackPhi);
-  tree->Branch("trackCharge", &trackCharge);
-  //workaround for older ROOT version inability to store std::array automatically
-  tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F");
-  tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F");
-  tree->Branch("refParms", refParms.data(), "refParms[5]/F");
-  tree->Branch("refCov", refCov.data(), "refCov[25]/F");
-  tree->Branch("genParms", genParms.data(), "genParms[5]/F");
-
-  tree->Branch("genPt", &genPt);
-  tree->Branch("genEta", &genEta);
-  tree->Branch("genPhi", &genPhi);
-  tree->Branch("genCharge", &genCharge);
   
-  tree->Branch("gradv", &gradv);
-  tree->Branch("hessv", &hessv);
-  tree->Branch("globalidxv", &globalidxv);
-  tree->Branch("jacrefv",&jacrefv);
+  
+  const int basketSize = 4*1024*1024;
+  tree->SetAutoFlush(0);
+  
+  tree->Branch("trackPt", &trackPt, basketSize);
+  tree->Branch("trackPtErr", &trackPtErr, basketSize);
+  tree->Branch("trackEta", &trackEta, basketSize);
+  tree->Branch("trackPhi", &trackPhi, basketSize);
+  tree->Branch("trackCharge", &trackCharge, basketSize);
+  //workaround for older ROOT version inability to store std::array automatically
+  tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
+  tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
+  tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
+  tree->Branch("refCov", refCov.data(), "refCov[25]/F", basketSize);
+  tree->Branch("genParms", genParms.data(), "genParms[5]/F", basketSize);
+
+  tree->Branch("genPt", &genPt, basketSize);
+  tree->Branch("genEta", &genEta, basketSize);
+  tree->Branch("genPhi", &genPhi, basketSize);
+  tree->Branch("genCharge", &genCharge, basketSize);
+  
+  tree->Branch("nParms", &nParms, basketSize);
+  tree->Branch("nJacRef", &nJacRef, basketSize);
+  
+  tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
+  tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
+  tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nParms]/F", basketSize);
+  
+  tree->Branch("nSym", &nSym, basketSize);
+  
+  tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+  tree->Branch("iidxhesspackedv", iidxhesspackedv.data(), "iidxhesspackedv[nSym]/i", basketSize);
+  tree->Branch("jidxhesspackedv", jidxhesspackedv.data(), "jidxhesspackedv[nSym]/i", basketSize);
+
 }
 
 ResidualGlobalCorrectionMaker::~ResidualGlobalCorrectionMaker()
@@ -272,7 +297,6 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     const std::vector<TrajectoryMeasurement> &tms = traj.measurements();
     
-    //TODO compute also dxy, dz/dsz for gen particle wrt reco::Beamspot for direct comparison to reconstructed quantities
     genPt = -99.;
     genEta = -99.;
     genPhi = -99.;
@@ -317,7 +341,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //TODO properly handle the outside-in case
     assert(fpropdir == alongMomentum);
     
-    const unsigned int nhits = tms.size();    
+    const unsigned int nhits = tms.size();
     unsigned int npixhits = 0;
 
     //count pixel hits since this is needed to size the arrays
@@ -366,6 +390,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     globalidxv.clear();
     globalidxv.resize(npars, 0);
+    
+    nParms = npars;
+    tree->SetBranchAddress("globalidxv", globalidxv.data());
     
     unsigned int alignmentidx = 0;
     unsigned int bfieldidx = 0;
@@ -629,17 +656,21 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //now do the expensive calculations and fill outputs
     
     gradv.clear();
-    hessv.clear();
     jacrefv.clear();
 
     gradv.resize(npars,0.);
-    hessv.resize(npars*npars, 0.);
     jacrefv.resize(5*npars, 0.);
-
+    
+    nJacRef = 5*npars;
+    tree->SetBranchAddress("gradv", gradv.data());
+    tree->SetBranchAddress("jacrefv", jacrefv.data());
+    
     //eigen representation of the underlying vector storage
     Map<VectorXf> grad(gradv.data(), npars);
-    Map<Matrix<float, Dynamic, Dynamic, RowMajor> > hess(hessv.data(), npars, npars);
     Map<Matrix<float, 5, Dynamic, RowMajor> > jacref(jacrefv.data(), 5, npars);
+    
+    //hessian is not stored directly so it's a standard Eigen Matrix
+    MatrixXf hess = MatrixXf::Zero(npars, npars);
     
     //expressions for gradients semi-automatically generated with sympy
 
@@ -692,19 +723,35 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //careful this is easy to screw up because it is "accidentally" symmetric
     hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = (8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 2*dE.transpose()*Qinv*E*Hprop*dF).cast<float>();
     
-//     //fill upper triangular blocks
-//     hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = hess.block(nparsAlignment, 0, nparsBfield, nparsAlignment);
-//     
-//     hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = hess.block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment);
-//     
-//     hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = hess.block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield);
+    //fill packed hessian and indices
+    const unsigned int nsym = npars*(1+npars)/2;
+    hesspackedv.clear();
+    iidxhesspackedv.clear();
+    jidxhesspackedv.clear();
     
-//     std::cout << Qinv << std::endl;
-//     std::cout << "Recomputed innner covariance:" << std::endl;
-//     std::cout << 2.*C.bottomRightCorner<5,5>() << std::endl;
-//     
-//     std::cout << "KF innner covariance:" << std::endl;
-//     std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
+    hesspackedv.resize(nsym, 0.);
+    iidxhesspackedv.resize(nsym, 0);
+    jidxhesspackedv.resize(nsym, 0);
+    
+    nSym =nsym;
+    tree->SetBranchAddress("hesspackedv", hesspackedv.data());
+    tree->SetBranchAddress("iidxhesspackedv", iidxhesspackedv.data());
+    tree->SetBranchAddress("jidxhesspackedv", jidxhesspackedv.data());
+    
+    Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
+    const Map<const VectorXu> globalidx(globalidxv.data(), npars);
+    Map<VectorXu> iidxhesspacked(iidxhesspackedv.data(), nsym);
+    Map<VectorXu> jidxhesspacked(jidxhesspackedv.data(), nsym);
+
+    unsigned int packedidx = 0;
+    for (unsigned int ipar = 0; ipar < npars; ++ipar) {
+      const unsigned int segmentsize = npars - ipar;
+      hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize);
+      iidxhesspacked.segment(packedidx, segmentsize).setConstant(globalidx[ipar]);
+      jidxhesspacked.segment(packedidx, segmentsize) = globalidx.tail(segmentsize);
+      packedidx += segmentsize;
+    }
+    
 
     tree->Fill();
   }
