@@ -267,6 +267,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   const float mass = 0.105;
   const float maxDPhi = 1.6;
   PropagatorWithMaterial rPropagator(oppositeToMomentum, mass, field, maxDPhi, true, -1., false);
+  PropagatorWithMaterial fPropagator(alongMomentum, mass, field, maxDPhi, true, -1., false);
   
   for (unsigned int j=0; j<trajH->size(); ++j) {
     const Trajectory& traj = (*trajH)[j];
@@ -390,6 +391,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     nParms = npars;
     tree->SetBranchAddress("globalidxv", globalidxv.data());
     
+    bool valid = true;
     unsigned int alignmentidx = 0;
     unsigned int bfieldidx = 0;
     unsigned int elossidx = 0;
@@ -456,6 +458,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         //n.b. the returned pathlength is negative when propagating oppositeToMomentum, and this ensures the correct
         //results for the transport Jacobians
         auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(toproptsos, updtsos.surface());
+        if (!propresult.first.isValid()) {
+          valid = false;
+          break;
+        }
         AnalyticalCurvilinearJacobian curvjac(toproptsos.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), propresult.second);
         const AlgebraicMatrix55 &jacF = curvjac.jacobian();
         
@@ -627,28 +633,28 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
     }
     
+    if (!valid) {
+      continue;
+    }
+    
     auto const& refpoint = track.referencePoint();
     auto const& trackmom = track.momentum();
     
-    //propagate inner state back to the reference point of the track and compute transport jacobian
-    //by constructing a dummy surface at the track reference point
-    const Surface::PositionType pos(refpoint.x(), refpoint.y(), refpoint.z());
+    const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
     const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z());
-    const GlobalVector ux = refmom.cross(GlobalVector(0.,0.,1.));
-    const GlobalVector uy = ux.cross(refmom);
     
-    const Surface::RotationType rot(ux, uy);
-    const ReferenceCountingPointer<Plane> surface = Plane::build(pos, rot);
-    
-    const TrajectoryStateOnSurface& toproptsos = tms.back().updatedState();
-    auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(toproptsos, *surface);
-    const CurvilinearTrajectoryParameters refCurv(propresult.first.globalPosition(), propresult.first.globalMomentum(), propresult.first.charge());
-    const AlgebraicVector5& refVec = refCurv.vector();
-    
-    AnalyticalCurvilinearJacobian curvjac(toproptsos.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), propresult.second);
+    //propagate track from reference point to first measurement to compute the pathlength, and then compute
+    //the transport jacobian corresponding to the reverse propagation
+    const TrajectoryStateOnSurface &innertsos = tms.back().updatedState();
+    FreeTrajectoryState refFts(refpos, refmom, track.charge(), innertsos.magneticField());
+    auto const& propresult = fPropagator.geometricalPropagator().propagateWithPath(refFts, innertsos.surface());
+    if (!propresult.first.isValid()) {
+      continue;
+    }
+    AnalyticalCurvilinearJacobian curvjac(propresult.first.globalParameters(), refFts.position(), refFts.momentum(), -propresult.second);
     const AlgebraicMatrix55& jacF = curvjac.jacobian();
     Map<const Matrix<double, 5, 5, RowMajor> > Fref(jacF.Array());
-    
+
     //now do the expensive calculations and fill outputs
     
     gradv.clear();
@@ -684,6 +690,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //fill output with corrected state and covariance at reference point
     refParms.fill(0.);
     refCov.fill(0.);
+    const AlgebraicVector5& refVec = track.parameters();
     Map<Vector5f>(refParms.data()) = (Map<const Vector5d>(refVec.Array()) + dxRef).cast<float>();
     Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Fref*C.bottomRightCorner<5,5>()*Fref.transpose()).cast<float>().triangularView<Upper>();
     
