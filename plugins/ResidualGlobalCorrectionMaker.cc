@@ -181,6 +181,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 
 
   fout = new TFile("trackTreeGrads.root", "RECREATE");
+//   fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
   //TODO this needs a newer root version
 //   fout->SetCompressionAlgorithm(ROOT::kLZ4);
 //   fout->SetCompressionLevel(3);
@@ -212,7 +213,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   
   tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
   tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
-  tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nParms]/F", basketSize);
+  tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
   
   tree->Branch("nSym", &nSym, basketSize);
   
@@ -283,6 +284,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     trackPhi = track.phi();
     trackCharge = track.charge();
     trackPtErr = track.ptError();
+    
+//     std::cout << "track pt: " << trackPt << " track eta: " << trackEta << " trackCharge: " << trackCharge << std::endl;
     
     auto const& tkparms = track.parameters();
     auto const& tkcov = track.covariance();
@@ -611,6 +614,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
         globalidxv[nparsAlignment + nparsBfield + elossidx] = elossglobalidx;
         elossidx++;
+        
+//         std::cout << "dqop/dqop: " << res_0 << " dqop/ddxdz: " << res_1 << " dqop/ddydz: " << res_2 << " dqop/dxi: " << res_3 << std::endl;
 
         //momentum kink residual
         AlgebraicVector5 const& idx0 = updtsos.localParameters().vector() - tmptsos.localParameters().vector();
