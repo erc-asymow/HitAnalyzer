@@ -180,8 +180,8 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
 
-  fout = new TFile("trackTreeGrads.root", "RECREATE");
-//   fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
+//   fout = new TFile("trackTreeGrads.root", "RECREATE");
+  fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
   //TODO this needs a newer root version
 //   fout->SetCompressionAlgorithm(ROOT::kLZ4);
 //   fout->SetCompressionLevel(3);
@@ -285,7 +285,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     trackCharge = track.charge();
     trackPtErr = track.ptError();
     
-//     std::cout << "track pt: " << trackPt << " track eta: " << trackEta << " trackCharge: " << trackCharge << std::endl;
+//     std::cout << "track pt: " << trackPt << " track eta: " << trackEta << " trackCharge: " << trackCharge << " qop: " << track.parameters()[0] << std::endl;
     
     auto const& tkparms = track.parameters();
     auto const& tkcov = track.covariance();
@@ -361,32 +361,50 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     const unsigned int nparsEloss = nhits - 1;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
     
-    //curvilinear to local jacobian (at two points)
-    GlobalParameterMatrix H = GlobalParameterMatrix::Zero(5*nhits, 5*nhits);
-    GlobalParameterMatrix Hprop = GlobalParameterMatrix::Zero(5*nhits, 5*nhits);
+    const unsigned int nstateparms = 5*nhits;
+    const unsigned int npropparms = 5*(nhits-1);
+    const unsigned int nhitparms = 2*nhits;
+    const unsigned int nmomparms = 3*(nhits-1);
+    const unsigned int nposparms = 2*(nhits-1);
+    constexpr unsigned int nrefparms = 5;
+    
+    //curvilinear to local jacobian (at two points), split into different pieces of the chi^2
+    //to keep the size of the matrices to a minimum by projecting out only the relevant
+    //components
+    GlobalParameterMatrix Hh = GlobalParameterMatrix::Zero(nhitparms, nstateparms);
+    GlobalParameterMatrix Hmom = GlobalParameterMatrix::Zero(nmomparms, nstateparms);
+    GlobalParameterMatrix Hpos = GlobalParameterMatrix::Zero(nposparms, nstateparms);
+    
+    GlobalParameterMatrix Hpropmom = GlobalParameterMatrix::Zero(nmomparms, npropparms);
+    GlobalParameterMatrix Hproppos = GlobalParameterMatrix::Zero(nposparms, npropparms);
     //alignment jacobian
-    AlignmentJacobianMatrix A = AlignmentJacobianMatrix::Zero(5*nhits, nparsAlignment);
+    AlignmentJacobianMatrix A = AlignmentJacobianMatrix::Zero(nhitparms, nparsAlignment);
     //propagation jacobian wrt parameters
-    GlobalParameterMatrix F = GlobalParameterMatrix::Zero(5*nhits, 5*nhits);
+    GlobalParameterMatrix F = GlobalParameterMatrix::Zero(npropparms, nstateparms);
+    //propagation jacobian back to track reference point wrt parameters
+    Matrix<double, nrefparms, Dynamic> Fref = Matrix<double, nrefparms, Dynamic>::Zero(nrefparms, nstateparms);
     //energy loss jacobian wrt parameters
-    GlobalParameterMatrix E = GlobalParameterMatrix::Zero(5*nhits, 5*nhits);
+    GlobalParameterMatrix E = GlobalParameterMatrix::Zero(nmomparms, nmomparms);
     //propagation jacobian with respect to b-field
-    TransportJacobianMatrix dF = TransportJacobianMatrix::Zero(5*nhits, nparsBfield);
+    TransportJacobianMatrix dF = TransportJacobianMatrix::Zero(npropparms, nparsBfield);
     //energy loss jacobian wrt energy loss
-    ELossJacobianMatrix dE = ELossJacobianMatrix::Zero(5*nhits, nparsEloss);
+    ELossJacobianMatrix dE = ELossJacobianMatrix::Zero(nmomparms, nparsEloss);
 //     //identity matrix
 //     GlobalParameterMatrix const I = GlobalParameterMatrix::Identity(5*nhits, 5*nhits);
     
     //hit covariance matrix
-    GlobalParameterMatrix Vinv = GlobalParameterMatrix::Zero(5*nhits, 5*nhits);
+    GlobalParameterMatrix Vinv = GlobalParameterMatrix::Zero(nhitparms, nhitparms);
     //process noise matrix (MS+stochastic energy loss)
-    GlobalParameterMatrix Qinv = GlobalParameterMatrix::Zero(5*nhits, 5*nhits);
+    GlobalParameterMatrix Qinv = GlobalParameterMatrix::Zero(nmomparms, nmomparms);
     
     //hit residuals
-    GlobalParameterVector dy0 = GlobalParameterVector::Zero(5*nhits);
+    GlobalParameterVector dy0 = GlobalParameterVector::Zero(nhitparms);
     //momentum kink residuals
-    GlobalParameterVector dx0 = GlobalParameterVector::Zero(5*nhits);
+    GlobalParameterVector dx0mom = GlobalParameterVector::Zero(nmomparms);
+    //position kink residuals
+    GlobalParameterVector dx0pos = GlobalParameterVector::Zero(nposparms);
     
+//     MatrixXd P = MatrixXd::Zero(2*(nhits-1), 5*nhits);
     
     globalidxv.clear();
     globalidxv.resize(npars, 0);
@@ -412,29 +430,30 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       //hit information
       if (hit->isValid()) {
         //fill x residual
-        dy0(5*i+3) = hit->localPosition().x() - updtsos.localPosition().x();
+        dy0(2*i) = hit->localPosition().x() - updtsos.localPosition().x();
         
         //check for 2d hits
         if (hit->dimension()>1) {
           //fill y residual
-          dy0(5*i+4) = hit->localPosition().y() - updtsos.localPosition().y();
+          dy0(2*i+1) = hit->localPosition().y() - updtsos.localPosition().y();
           
           //compute 2x2 covariance matrix and invert
           Matrix2d iV;
           iV << hit->localPositionError().xx(), hit->localPositionError().xy(),
                 hit->localPositionError().xy(), hit->localPositionError().yy();
-          Vinv.block<2,2>(5*i+3, 5*i+3) = iV.inverse();
+          Vinv.block<2,2>(2*i, 2*i) = iV.inverse();
         }
         else {
           //covariance is 1x1
-          Vinv(5*i+3, 5*i+3) = 1./hit->localPositionError().xx();
+          Vinv(2*i, 2*i) = 1./hit->localPositionError().xx();
         }
       }
       
       JacobianCurvilinearToLocal h(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
       const AlgebraicMatrix55 &jach = h.jacobian();
       //efficient assignment from SMatrix using Eigen::Map
-      H.block<5,5>(5*i, 5*i) = Map<const Matrix<double, 5, 5, RowMajor> >(jach.Array());
+      Map<const Matrix<double, 5, 5, RowMajor> > jacheig(jach.Array());
+      Hh.block<2,5>(2*i, 5*i) = jacheig.bottomRows<2>();
       
 //       std::cout << "H:" << std::endl;
 //       std::cout << H.block<5,5>(5*i, 5*i) << std::endl;
@@ -442,19 +461,23 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       //fill alignment jacobian
       bool ispixel = GeomDetEnumerators::isTrackerPixel(detectorG->subDetector());
       //2d alignment correction for pixel hits, otherwise 1d
-      A(5*i+3, alignmentidx) = 1.;
+      A(2*i, alignmentidx) = 1.;
       const unsigned int xglobalidx = detidparms.at(std::make_pair(0,hit->geographicalId()));
       globalidxv[alignmentidx] = xglobalidx;
       alignmentidx++;
       if (ispixel) {
-        A(5*i+4, alignmentidx) = 1.;
+        A(2*i+1, alignmentidx) = 1.;
         const unsigned int yglobalidx = detidparms.at(std::make_pair(1,hit->geographicalId()));
         globalidxv[alignmentidx] = yglobalidx;
         alignmentidx++;
       }
 
       
-      if (i >0) {        
+      if (i >0) {
+        //fill jacobians for nominal state
+        Hmom.block<3,5>(3*(i-1), 5*i) = jacheig.topRows<3>();
+        Hpos.block<2,5>(2*(i-1), 5*i) = jacheig.bottomRows<2>();
+        
         //compute transport jacobian propagating outside in to current layer
         TrajectoryStateOnSurface const& toproptsos = tms[i-1].updatedState();
         
@@ -468,7 +491,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         AnalyticalCurvilinearJacobian curvjac(toproptsos.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), propresult.second);
         const AlgebraicMatrix55 &jacF = curvjac.jacobian();
         
-        F.block<5,5>(5*i, 5*(i-1)) = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array());
+        F.block<5,5>(5*(i-1), 5*(i-1)) = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array());
         
         //analytic jacobian wrt magnitude of magnetic field
         //TODO should we parameterize with respect to z-component instead?
@@ -532,7 +555,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const Map<const Matrix<double, 5, 6, RowMajor> > cart2curvjac(cart2curvjacs.Array());
         
         //compute final jacobian (and convert to Tesla)
-        dF.block<5,1>(5*i, bfieldidx) = 2.99792458e-3*cart2curvjac*dFglobal;
+        dF.block<5,1>(5*(i-1), bfieldidx) = 2.99792458e-3*cart2curvjac*dFglobal;
         
 //         std::cout << "dF = " << dF.block<5,1>(5*i, bfieldidx) << std::endl;
         
@@ -552,7 +575,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         JacobianCurvilinearToLocal hprop(tmptsos.surface(), tmptsos.localParameters(), *tmptsos.magneticField());
         const AlgebraicMatrix55 &jachprop = hprop.jacobian();
         //efficient assignment from SMatrix using Eigen::Map
-        Hprop.block<5,5>(5*i, 5*i) = Map<const Matrix<double, 5, 5, RowMajor> >(jachprop.Array());
+        Map<const Matrix<double, 5, 5, RowMajor> > jachpropeig(jachprop.Array());
+        Hpropmom.block<3,5>(3*(i-1), 5*(i-1)) = jachpropeig.topRows<3>();
+        Hproppos.block<2,5>(2*(i-1), 5*(i-1)) = jachpropeig.bottomRows<2>();
         
         //full analytic energy loss jacobian (gross)
         //n.b this is the jacobian in LOCAL parameters (so E multiplies to the left of H s.t the total projection is E*Hprop*F)
@@ -599,40 +624,38 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const double res_2 = -dydz*x26;
         const double res_3 = -x20*x25;
 
-        E(5*i,5*i) = res_0;
-        E(5*i,5*i+1) = res_1;
-        E(5*i,5*i+2) = res_2;
-        E(5*i+1,5*i+1) = 1.;
-        E(5*i+2,5*i+2) = 1.;
-        E(5*i+3,5*i+3) = 1.;
-        E(5*i+4,5*i+4) = 1.;
+        E(3*(i-1), 3*(i-1)) = res_0;
+        E(3*(i-1), 3*(i-1)+1) = res_1;
+        E(3*(i-1), 3*(i-1)+2) = res_2;
+        E(3*(i-1)+1, 3*(i-1)+1) = 1.;
+        E(3*(i-1)+2, 3*(i-1)+2) = 1.;
         
 //         std::cout << "Eloss 0,0 = " << E(5*i,5*i) << std::endl;
         
         //derivative of the energy loss with respect to the energy loss parameter xi
-        dE(5*i, elossidx) = res_3;
+        dE(3*(i-1), elossidx) = res_3;
         const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
         globalidxv[nparsAlignment + nparsBfield + elossidx] = elossglobalidx;
         elossidx++;
         
-//         std::cout << "dqop/dqop: " << res_0 << " dqop/ddxdz: " << res_1 << " dqop/ddydz: " << res_2 << " dqop/dxi: " << res_3 << std::endl;
+//         double qopratio = tmptsos.localParameters().qbp()/propresult.first.localParameters().qbp();
+//         std::cout << "xi: " << xi << " qopout/qopin: " <<  qopratio << " dqop/dqop: " << res_0 << " dqop/ddxdz: " << res_1 << " dqop/ddydz: " << res_2 << " dqop/dxi: " << res_3 << std::endl;
 
-        //momentum kink residual
+        //kink residuals
         AlgebraicVector5 const& idx0 = updtsos.localParameters().vector() - tmptsos.localParameters().vector();
-        dx0.segment<5>(5*i) = Map<const Vector5d>(idx0.Array());
+        Map<const Vector5d> idx0eig(idx0.Array());
+        dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
+        dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
         
         AlgebraicMatrix55 const Qmat = tmptsos.localError().matrix();
         Map<const Matrix<double, 5, 5, RowMajor> >iQ(Qmat.Array());
         //Q is 3x3 in the upper left block because there is no displacement on thin scattering layers
-        //so invert the upper 3x3 block and insert small values by hand for the displacement uncertainties
-        const double epsxy = 1e-5; //0.1um
-        Qinv.block<3,3>(5*i,5*i) = iQ.topLeftCorner<3,3>().inverse();
-        Qinv(5*i+3, 5*i+3) = 1./epsxy/epsxy;
-        Qinv(5*i+4, 5*i+4) = 1./epsxy/epsxy;
+        //so invert the upper 3x3 block
+        //(The zero-displacement constraint is implmeented with Lagrange multipliers)
+        Qinv.block<3,3>(3*(i-1), 3*(i-1)) = iQ.topLeftCorner<3,3>().inverse();
 
 //         std::cout << "Qinv" << std::endl;        
 //         std::cout << Qinv.block<5,5>(5*i, 5*i) << std::endl; 
-
                 
       }
 
@@ -658,7 +681,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     }
     AnalyticalCurvilinearJacobian curvjac(propresult.first.globalParameters(), refFts.position(), refFts.momentum(), -propresult.second);
     const AlgebraicMatrix55& jacF = curvjac.jacobian();
-    Map<const Matrix<double, 5, 5, RowMajor> > Fref(jacF.Array());
+    Fref.rightCols<5>() = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array());
 
     //now do the expensive calculations and fill outputs
     
@@ -673,63 +696,92 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     tree->SetBranchAddress("jacrefv", jacrefv.data());
     
     //eigen representation of the underlying vector storage
-    Map<VectorXf> grad(gradv.data(), npars);
-    Map<Matrix<float, 5, Dynamic, RowMajor> > jacref(jacrefv.data(), 5, npars);
+    Map<VectorXf> gradout(gradv.data(), npars);
+    Map<Matrix<float, 5, Dynamic, RowMajor> > jacrefout(jacrefv.data(), 5, npars);
     
     //hessian is not stored directly so it's a standard Eigen Matrix
-    MatrixXf hess = MatrixXf::Zero(npars, npars);
+    VectorXd grad = VectorXd::Zero(npars);
+    MatrixXd hess = MatrixXd::Zero(npars, npars);
+    Matrix<double, 5, Dynamic> jacref = Matrix<double, 5, Dynamic>::Zero(5, npars);
     
     //expressions for gradients semi-automatically generated with sympy
+    
+    //compute KKT matrix explicitly to simplify below expressions
+    MatrixXd Kinv = MatrixXd::Zero(nstateparms + nposparms, nstateparms + nposparms);
+    
+    //d2chi^2/dx^2
+    Kinv.topLeftCorner(nstateparms, nstateparms) = 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom) + 2*Hh.transpose()*Vinv*Hh;
 
-    //compute robust cholesky decomposition of inverse covariance matrix
-    auto const& Cinvldlt = (2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H) + 2*H.transpose()*Vinv*H).ldlt();
+    //d2chi^2/dxdlambda (lower triangular block)
+    Kinv.bottomLeftCorner(nposparms, nstateparms) = Hpos - Hproppos*F;
+
+    //d2chi^2/dxdlambda (upper triangular block)
+    Kinv.topRightCorner(nstateparms, nposparms) = Kinv.bottomLeftCorner(nposparms, nstateparms).transpose();
     
-    //compute covariance matrix explicitly to simplify below expressions
-    //TODO avoid this by replacing matrix multiplications with C with the appropriate ldlt solve operations in the gradients below
-    const GlobalParameterMatrix C = Cinvldlt.solve(GlobalParameterMatrix::Identity(5*nhits,5*nhits));
-    
+    const MatrixXd K = Kinv.inverse();
+    auto const& Kxx = K.topLeftCorner(nstateparms, nstateparms);
+    auto const& Kxlam = K.topRightCorner(nstateparms, nposparms);
+    auto const& Klamlam = K.bottomRightCorner(nposparms, nposparms);
+
     //compute shift in parameters at reference point from matrix model given hit and kink residuals
     //(but for nominal values of the model correction
-    Vector5d dxRef = Fref*Cinvldlt.solve(-2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 + 2*H.transpose()*Vinv*dy0).tail<5>();
+    Vector5d dxRef = Fref*(-Kxlam*dx0pos - 2*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom + 2*Kxx*Hh.transpose()*Vinv*dy0);
     
     //fill output with corrected state and covariance at reference point
     refParms.fill(0.);
     refCov.fill(0.);
     const AlgebraicVector5& refVec = track.parameters();
     Map<Vector5f>(refParms.data()) = (Map<const Vector5d>(refVec.Array()) + dxRef).cast<float>();
-    Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Fref*C.bottomRightCorner<5,5>()*Fref.transpose()).cast<float>().triangularView<Upper>();
+    Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Fref*Kxx*Fref.transpose()).cast<float>().triangularView<Upper>();
     
     //set jacobian for reference point parameters
-    jacref.leftCols(nparsAlignment) = (-2*Fref*Cinvldlt.solve(H.transpose()*Vinv*A).bottomRows<5>()).cast<float>();
+    jacref.leftCols(nparsAlignment) = -2*Fref*Kxx*Hh.transpose()*Vinv*A;
 
-    jacref.block<5, Dynamic>(0, nparsAlignment, 5, nparsBfield) = (2*Fref*Cinvldlt.solve((-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF).bottomRows<5>()).cast<float>();
+    jacref.block<5, Dynamic>(0, nparsAlignment, 5, nparsBfield) = Fref*(Kxlam*Hproppos*dF + 2*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF);
     
-    jacref.rightCols(nparsEloss) = (2*Fref*Cinvldlt.solve((-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE).bottomRows<5>()).cast<float>();
+    jacref.rightCols(nparsEloss) = 2*Fref*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE;
+    
+    jacrefout = jacref.cast<float>();
     
 //     std::cout << "jacref:" << std::endl;
 //     std::cout << jacref << std::endl;
     
     //set gradients
-    grad.head(nparsAlignment) = (-2*A.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0) - 4*A.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*A.transpose()*Vinv*H*C*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0)).cast<float>();
+    grad.head(nparsAlignment) = -2*A.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0) - 2*A.transpose()*Vinv*Hh*Kxlam*((Hpos - Hproppos*F)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0pos) - 2*A.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) - 4*A.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) + 4*A.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0);
 
-    grad.segment(nparsAlignment,nparsBfield) = (-2*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) - 4*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0)).cast<float>();
+    grad.segment(nparsAlignment,nparsBfield) = -2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*((Hpos - Hproppos*F)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0pos) + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0) - dF.transpose()*Hproppos.transpose()*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dF.transpose()*Hproppos.transpose()*Klamlam*((Hpos - Hproppos*F)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0pos) + dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) - 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0);
     
-    grad.tail(nparsEloss) = (-2*dE.transpose()*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) + 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-(-E*Hprop*F + H)*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dx0) - 4*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*(H*C*(2*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dx0 - 2*H.transpose()*Vinv*dy0) + dy0)).cast<float>();
+    grad.tail(nparsEloss) = -2*dE.transpose()*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) + 2*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*((Hpos - Hproppos*F)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0pos) + 2*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0);
+    
+    gradout = grad.cast<float>();
     
     //fill hessian (diagonal blocks, upper triangular part only)
-    hess.topLeftCorner(nparsAlignment, nparsAlignment).triangularView<Upper>() = (2*A.transpose()*Vinv*A + 8*A.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 8*A.transpose()*Vinv*H*C*H.transpose()*Vinv*A + 8*A.transpose()*Vinv*H*C*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A).cast<float>().triangularView<Upper>();
+    hess.topLeftCorner(nparsAlignment, nparsAlignment).triangularView<Upper>() = (2*A.transpose()*Vinv*A + 4*A.transpose()*Vinv*Hh*Kxlam*(Hpos - Hproppos*F)*Kxx*Hh.transpose()*Vinv*A + 4*A.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A - 8*A.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A).triangularView<Upper>();
     
-    hess.block(nparsAlignment, nparsAlignment, nparsBfield, nparsBfield).triangularView<Upper>() = (8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF - 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 2*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*E*Hprop*dF).cast<float>().triangularView<Upper>();
+    hess.block(nparsAlignment, nparsAlignment, nparsBfield, nparsBfield).triangularView<Upper>() = (2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxlam*Hproppos*dF + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Klamlam*Hproppos*dF + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxlam*Hproppos*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*E*Hpropmom*dF + dF.transpose()*Hproppos.transpose()*Klamlam*(Hpos - Hproppos*F)*Kxlam*Hproppos*dF + 2*dF.transpose()*Hproppos.transpose()*Klamlam*(Hpos - Hproppos*F)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 2*dF.transpose()*Hproppos.transpose()*Klamlam*Hproppos*dF + dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Klamlam*Hproppos*dF + 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*Hh*Kxlam*Hproppos*dF + 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF).triangularView<Upper>();
     
-    hess.bottomRightCorner(nparsEloss,nparsEloss).triangularView<Upper>() = (8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*dE + 2*dE.transpose()*Qinv*dE).cast<float>().triangularView<Upper>();
+    hess.bottomRightCorner(nparsEloss,nparsEloss).triangularView<Upper>() = (4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 2*dE.transpose()*Qinv*dE).triangularView<Upper>();
     
     //fill hessian off-diagonal blocks (upper triangular part)
-    hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = (-8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A + 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 8*dF.transpose()*Hprop.transpose()*E.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A).cast<float>();
+    hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = -4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*Hh.transpose()*Vinv*A - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A - 2*dF.transpose()*Hproppos.transpose()*Klamlam*(Hpos - Hproppos*F)*Kxx*Hh.transpose()*Vinv*A - 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*Hh.transpose()*Vinv*A - 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A + 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*A - 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A;
     
-    hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = (-8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*H.transpose()*Vinv*A).cast<float>();
+    hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = -4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*Hh.transpose()*Vinv*A - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*Hh.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A;
     
     //careful this is easy to screw up because it is "accidentally" symmetric
-    hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = (8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF - 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 8*dE.transpose()*Qinv*(-E*Hprop*F + H)*C*H.transpose()*Vinv*H*C*(-F.transpose()*Hprop.transpose()*E.transpose() + H.transpose())*Qinv*E*Hprop*dF + 2*dE.transpose()*Qinv*E*Hprop*dF).cast<float>();
+    hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = 2*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxlam*Hproppos*dF + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 2*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Klamlam*Hproppos*dF + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxlam*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dE.transpose()*Qinv*E*Hpropmom*dF;    
+    
+    std::cout << "hess debug" << std::endl;
+    std::cout << "original cov" << std::endl;
+    std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
+    std::cout << "recomputed cov" << std::endl;
+    std::cout << 2*Kxx.bottomRightCorner<5,5>() << std::endl;
+    
+    
+/*    std::cout << "hess debug" << std::endl;
+    std::cout << "top right corner:" << std::endl;
+    std::cout << hess.topRightCorner(10,10) << std::endl;
+    std::cout << "bottom left corner:" << std::endl;
+    std::cout << hess.bottomLeftCorner(10,10) << std::endl;  */  
     
     //fill packed hessian and indices
     const unsigned int nsym = npars*(1+npars)/2;
@@ -745,7 +797,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     unsigned int packedidx = 0;
     for (unsigned int ipar = 0; ipar < npars; ++ipar) {
       const unsigned int segmentsize = npars - ipar;
-      hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize);
+      hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
       packedidx += segmentsize;
     }
 
