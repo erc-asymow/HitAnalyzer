@@ -47,6 +47,9 @@
 #include "RecoTracker/TransientTrackingRecHit/interface/TkTransientTrackingRecHitBuilder.h"
 #include "TrackingTools/TrackFitters/interface/TrajectoryStateCombiner.h"
 #include "TrackingTools/PatternTools/interface/TrajTrackAssociation.h"
+#include "DataFormats/TrackerRecHit2D/interface/TkCloner.h"
+
+
 // #include "../interface/OffsetMagneticField.h"
 // #include "../interface/ParmInfo.h"
 
@@ -116,11 +119,15 @@ private:
   //virtual void endRun(edm::Run const&, edm::EventSetup const&) override;
   //virtual void beginLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
   //virtual void endLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
+  
+  
 
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
+  edm::EDGetTokenT<reco::TrackCollection> inputTrackOrig_;
+  edm::EDGetTokenT<std::vector<int> > inputIndices_;
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
 
   TFile *fout;
@@ -177,6 +184,8 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
   GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
   inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
+  inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
+  inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag("generalTracks"));
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
 
@@ -257,6 +266,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   Handle<TrajTrackAssociationCollection> trackH;
   iEvent.getByToken(inputTrack_, trackH);
   
+  Handle<reco::TrackCollection> trackOrigH;
+  iEvent.getByToken(inputTrackOrig_, trackOrigH);
+  
+  Handle<std::vector<int> > indicesH;
+  iEvent.getByToken(inputIndices_, indicesH);
+  
   Handle<std::vector<Trajectory> > trajH;
   iEvent.getByToken(inputTraj_, trajH);
   
@@ -270,11 +285,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   PropagatorWithMaterial rPropagator(oppositeToMomentum, mass, field, maxDPhi, true, -1., false);
   PropagatorWithMaterial fPropagator(alongMomentum, mass, field, maxDPhi, true, -1., false);
   
+  KFUpdator updator;
+//   TkClonerImpl hitCloner;
+//   TKCloner const* cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(builder)->cloner()
+//   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
+  
   for (unsigned int j=0; j<trajH->size(); ++j) {
     const Trajectory& traj = (*trajH)[j];
     
     const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
     const reco::Track& track = *(*trackH)[trajref];
+//     const reco::Track& trackOrig = (*trackOrigH)[(*indicesH)[j]];
 
     if (traj.isLooper()) {
       continue;
@@ -396,6 +417,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     GlobalParameterMatrix Vinv = GlobalParameterMatrix::Zero(nhitparms, nhitparms);
     //process noise matrix (MS+stochastic energy loss)
     GlobalParameterMatrix Qinv = GlobalParameterMatrix::Zero(nmomparms, nmomparms);
+    GlobalParameterMatrix Qinvpos = GlobalParameterMatrix::Zero(nposparms, nposparms);
     
     //hit residuals
     GlobalParameterVector dy0 = GlobalParameterVector::Zero(nhitparms);
@@ -412,7 +434,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     nParms = npars;
     tree->SetBranchAddress("globalidxv", globalidxv.data());
     
+    TrajectoryStateOnSurface currtsos;
+    
     bool valid = true;
+    unsigned int ntotalhitdim = 0;
     unsigned int alignmentidx = 0;
     unsigned int bfieldidx = 0;
     unsigned int elossidx = 0;
@@ -421,21 +446,35 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       TrajectoryMeasurement const& tm = tms[i];
       auto const& hit = tm.recHit();
+      TrajectoryStateOnSurface const& backpredtsos = tm.backwardPredictedState();
       const GeomDet *detectorG = globalGeometry->idToDet(hit->geographicalId());
-      TrajectoryStateOnSurface const& updtsos = tm.updatedState();
+            
+      if (!backpredtsos.isValid()) {
+        std::cout << "Abort: backpredtsos invalid" << std::endl;
+        valid = false;
+        break;
+      }
       
-      //TODO properly handle this case
-      assert(updtsos.isValid());
+      TrajectoryStateOnSurface backupdtsos(backpredtsos);
       
       //hit information
       if (hit->isValid()) {
+        ntotalhitdim += std::min(hit->dimension(), 2);
+        //update state if hit is valid
+        backupdtsos = updator.update(backpredtsos, *hit);
+        if (!backupdtsos.isValid()) {
+          std::cout << "Abort: hit update failed" << std::endl;
+          valid = false;
+          break;
+        }
+        
         //fill x residual
-        dy0(2*i) = hit->localPosition().x() - updtsos.localPosition().x();
+        dy0(2*i) = hit->localPosition().x() - backupdtsos.localPosition().x();
         
         //check for 2d hits
         if (hit->dimension()>1) {
           //fill y residual
-          dy0(2*i+1) = hit->localPosition().y() - updtsos.localPosition().y();
+          dy0(2*i+1) = hit->localPosition().y() - backupdtsos.localPosition().y();
           
           //compute 2x2 covariance matrix and invert
           Matrix2d iV;
@@ -449,7 +488,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         }
       }
       
-      JacobianCurvilinearToLocal h(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
+      JacobianCurvilinearToLocal h(backupdtsos.surface(), backupdtsos.localParameters(), *backupdtsos.magneticField());
       const AlgebraicMatrix55 &jach = h.jacobian();
       //efficient assignment from SMatrix using Eigen::Map
       Map<const Matrix<double, 5, 5, RowMajor> > jacheig(jach.Array());
@@ -477,46 +516,60 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         //fill jacobians for nominal state
         Hmom.block<3,5>(3*(i-1), 5*i) = jacheig.topRows<3>();
         Hpos.block<2,5>(2*(i-1), 5*i) = jacheig.bottomRows<2>();
+
+        //backwards predicted state is equivalent to the backward propagated state from the previous layer (outside-in)
+        JacobianCurvilinearToLocal hprop(backpredtsos.surface(), backpredtsos.localParameters(), *backpredtsos.magneticField());
+        const AlgebraicMatrix55 &jachprop = hprop.jacobian();
+        //efficient assignment from SMatrix using Eigen::Map
+        Map<const Matrix<double, 5, 5, RowMajor> > jachpropeig(jachprop.Array());
+        Hpropmom.block<3,5>(3*(i-1), 5*(i-1)) = jachpropeig.topRows<3>();
+        Hproppos.block<2,5>(2*(i-1), 5*(i-1)) = jachpropeig.bottomRows<2>();
         
-        //compute transport jacobian propagating outside in to current layer
-        TrajectoryStateOnSurface const& toproptsos = tms[i-1].updatedState();
+        //kink residuals are equal to the update applied to the state by the current hit
+        AlgebraicVector5 const& idx0 = backupdtsos.localParameters().vector() - backpredtsos.localParameters().vector();        
+        Map<const Vector5d> idx0eig(idx0.Array());
+        dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
+        dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
         
-        //n.b. the returned pathlength is negative when propagating oppositeToMomentum, and this ensures the correct
-        //results for the transport Jacobians
-        auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(toproptsos, updtsos.surface());
+        //propagate the previous updated state outside-in as in the smoother to compute the path length
+        //use the geometrical propagator since the material effects are dealt with separately
+        auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(currtsos, backpredtsos.surface());
         if (!propresult.first.isValid()) {
+          std::cout << "Abort: propagation failed" << std::endl;
           valid = false;
           break;
         }
-        AnalyticalCurvilinearJacobian curvjac(toproptsos.globalParameters(), propresult.first.globalParameters().position(), propresult.first.globalParameters().momentum(), propresult.second);
+        TrajectoryStateOnSurface proptsos = propresult.first;
+        const double s = propresult.second;
+        
+        //compute transport jacobian
+        AnalyticalCurvilinearJacobian curvjac(currtsos.globalParameters(), proptsos.globalParameters().position(), proptsos.globalParameters().momentum(), s);
         const AlgebraicMatrix55 &jacF = curvjac.jacobian();
-        
         F.block<5,5>(5*(i-1), 5*(i-1)) = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array());
-        
+       
         //analytic jacobian wrt magnitude of magnetic field
         //TODO should we parameterize with respect to z-component instead?
         //extending derivation from CMS NOTE 2006/001
-        const Vector3d b(toproptsos.globalParameters().magneticFieldInInverseGeV().x(),
-                           toproptsos.globalParameters().magneticFieldInInverseGeV().y(),
-                           toproptsos.globalParameters().magneticFieldInInverseGeV().z());
+        const Vector3d b(currtsos.globalParameters().magneticFieldInInverseGeV().x(),
+                           currtsos.globalParameters().magneticFieldInInverseGeV().y(),
+                           currtsos.globalParameters().magneticFieldInInverseGeV().z());
         double magb = b.norm();
         const Vector3d h = b.normalized();
 
-        const Vector3d p0(toproptsos.globalParameters().momentum().x(),
-                            toproptsos.globalParameters().momentum().y(),
-                            toproptsos.globalParameters().momentum().z());
-        const Vector3d p1(propresult.first.globalParameters().momentum().x(),
-                            propresult.first.globalParameters().momentum().y(),
-                            propresult.first.globalParameters().momentum().z());
+        const Vector3d p0(currtsos.globalParameters().momentum().x(),
+                            currtsos.globalParameters().momentum().y(),
+                            currtsos.globalParameters().momentum().z());
+        const Vector3d p1(proptsos.globalParameters().momentum().x(),
+                            proptsos.globalParameters().momentum().y(),
+                            proptsos.globalParameters().momentum().z());
         const Vector3d T0 = p0.normalized();
         double p = p1.norm();
         const Vector3d T = p1.normalized();
-        double q = toproptsos.charge();
+        double q = currtsos.charge();
         
         const Vector3d N0 = h.cross(T0).normalized();
         const double alpha = h.cross(T).norm();
         const double gamma = h.transpose()*T;
-        const double s = propresult.second;
 
         //this is printed from sympy.printing.cxxcode together with sympy.cse for automatic substitution of common expressions
         auto const xf0 = q*s/p;
@@ -550,7 +603,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         dFglobal.tail<3>() = dPdB;
         
         //convert to curvilinear
-        JacobianCartesianToCurvilinear cart2curv(propresult.first.globalParameters());
+        JacobianCartesianToCurvilinear cart2curv(proptsos.globalParameters());
         const AlgebraicMatrix56& cart2curvjacs = cart2curv.jacobian();
         const Map<const Matrix<double, 5, 6, RowMajor> > cart2curvjac(cart2curvjacs.Array());
         
@@ -563,32 +616,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         globalidxv[nparsAlignment + bfieldidx] = bfieldglobalidx;
         bfieldidx++;
         
-        //apply material effects (in reverse)
-        TrajectoryStateOnSurface tmptsos(propresult.first.localParameters(),
-                                          LocalTrajectoryError(),
-                                          propresult.first.surface(),
-                                          propresult.first.magneticField(),
-                                          SurfaceSideDefinition::afterSurface);
-        
-        rPropagator.materialEffectsUpdator().updateStateInPlace(tmptsos, rpropdir);
-        
-        JacobianCurvilinearToLocal hprop(tmptsos.surface(), tmptsos.localParameters(), *tmptsos.magneticField());
-        const AlgebraicMatrix55 &jachprop = hprop.jacobian();
-        //efficient assignment from SMatrix using Eigen::Map
-        Map<const Matrix<double, 5, 5, RowMajor> > jachpropeig(jachprop.Array());
-        Hpropmom.block<3,5>(3*(i-1), 5*(i-1)) = jachpropeig.topRows<3>();
-        Hproppos.block<2,5>(2*(i-1), 5*(i-1)) = jachpropeig.bottomRows<2>();
-        
+        //compute the inverse energy loss jacobian
         //full analytic energy loss jacobian (gross)
         //n.b this is the jacobian in LOCAL parameters (so E multiplies to the left of H s.t the total projection is E*Hprop*F)
         const double m2 = pow(rPropagator.materialEffectsUpdator().mass(), 2);  // use mass hypothesis from constructor
         constexpr double emass = 0.511e-3;
         constexpr double poti = 16.e-9 * 10.75;                 // = 16 eV * Z**0.9, for Si Z=14
         const double eplasma = 28.816e-9 * sqrt(2.33 * 0.498);  // 28.816 eV * sqrt(rho*(Z/A)) for Si
-        const double qop = propresult.first.localParameters().qbp();
-        const double dxdz = propresult.first.localParameters().dxdz();
-        const double dydz = propresult.first.localParameters().dydz();
-        const double xi = updtsos.surface().mediumProperties().xi();
+        const double qop = proptsos.localParameters().qbp();
+        const double dxdz = proptsos.localParameters().dxdz();
+        const double dydz = proptsos.localParameters().dydz();
+        const double xi = proptsos.surface().mediumProperties().xi();
 //         printf("xi = %5e\n", xi);
         
         //this is printed from sympy.printing.cxxcode together with sympy.cse for automatic substitution of common expressions
@@ -637,28 +675,61 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
         globalidxv[nparsAlignment + nparsBfield + elossidx] = elossglobalidx;
         elossidx++;
+       
+//         const double oldqop = proptsos.localParameters().vector()[0];
+        //apply material effects in reverse
+        //zero local errors to directly access the process noise matrix
+        proptsos.update(proptsos.localParameters(),
+                       LocalTrajectoryError(0.,0.,0.,0.,0.),
+                       proptsos.surface(),
+                       proptsos.magneticField(),
+                       proptsos.surfaceSide());
         
-//         double qopratio = tmptsos.localParameters().qbp()/propresult.first.localParameters().qbp();
-//         std::cout << "xi: " << xi << " qopout/qopin: " <<  qopratio << " dqop/dqop: " << res_0 << " dqop/ddxdz: " << res_1 << " dqop/ddydz: " << res_2 << " dqop/dxi: " << res_3 << std::endl;
-
-        //kink residuals
-        AlgebraicVector5 const& idx0 = updtsos.localParameters().vector() - tmptsos.localParameters().vector();
-        Map<const Vector5d> idx0eig(idx0.Array());
-        dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
-        dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
-        
-        AlgebraicMatrix55 const Qmat = tmptsos.localError().matrix();
+        //apply the state update from the material effects (in reverse)
+        bool ok = rPropagator.materialEffectsUpdator().updateStateInPlace(proptsos, rpropdir);
+        if (!ok) {
+          std::cout << "Abort: material update failed" << std::endl;
+          valid = false;
+          break;
+        }
+       
+        //get the process noise matrix
+        AlgebraicMatrix55 const Qmat = proptsos.localError().matrix();
         Map<const Matrix<double, 5, 5, RowMajor> >iQ(Qmat.Array());
         //Q is 3x3 in the upper left block because there is no displacement on thin scattering layers
         //so invert the upper 3x3 block
-        //(The zero-displacement constraint is implmeented with Lagrange multipliers)
+        //(The zero-displacement constraint is implemented with Lagrange multipliers)
         Qinv.block<3,3>(3*(i-1), 3*(i-1)) = iQ.topLeftCorner<3,3>().inverse();
-
+        
+        //zero displacement on thin scattering layer approximated with small uncertainty
+        const double epsxy = 1e-5; //0.1um
+        Qinvpos(2*(i-1), 2*(i-1)) = 1./epsxy/epsxy;
+        Qinvpos(2*(i-1)+1, 2*(i-1)+1) = 1./epsxy/epsxy;
+        
+//         double qopratio = proptsos.localParameters().vector()[0]/oldqop;
+//         
+//         std::cout << "iQ" << std::endl;
+//         std::cout << iQ << std::endl;
+//         std::cout << "qopratio" << std::endl;
+//         std::cout << qopratio << std::endl;
+//         
+//         
+// //         AlgebraicVector5 elossdiff = tmptsos.localParameters().vector() - propresult.first.localParameters().vector();
+// //         std::cout << "idx0eig" << std::endl;
+// //         std::cout << idx0eig << std::endl;
+//         std::cout << "backupdtsos" << std::endl;
+//         std::cout << backupdtsos.localParameters().vector() << std::endl;
+//         std::cout << "dx0mom" << std::endl;
+//         std::cout << dx0mom.segment<3>(3*(i-1)) << std::endl;
+//         std::cout << "dx0pos" << std::endl;
+//         std::cout << dx0pos.segment<2>(2*(i-1)) << std::endl;
+// //         std::cout << "elossdiff" << std::endl;
+// //         std::cout << elossdiff << std::endl;
 //         std::cout << "Qinv" << std::endl;        
-//         std::cout << Qinv.block<5,5>(5*i, 5*i) << std::endl; 
+//         std::cout << Qinv.block<3,3>(3*(i-1), 3*(i-1)) << std::endl; 
                 
       }
-
+      currtsos = backupdtsos;
     }
     
     if (!valid) {
@@ -677,6 +748,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     FreeTrajectoryState refFts(refpos, refmom, track.charge(), innertsos.magneticField());
     auto const& propresult = fPropagator.geometricalPropagator().propagateWithPath(refFts, innertsos.surface());
     if (!propresult.first.isValid()) {
+      std::cout << "Abort: propagation from reference point failed" << std::endl;
       continue;
     }
     AnalyticalCurvilinearJacobian curvjac(propresult.first.globalParameters(), refFts.position(), refFts.momentum(), -propresult.second);
@@ -704,6 +776,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     MatrixXd hess = MatrixXd::Zero(npars, npars);
     Matrix<double, 5, Dynamic> jacref = Matrix<double, 5, Dynamic>::Zero(5, npars);
     
+//     MatrixXd Cinvtest = 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom) + 2*Hh.transpose()*Vinv*Hh + 2*(Hpos-Hproppos*F).transpose()*Qinvpos*(Hpos-Hproppos*F);
+    
     //expressions for gradients semi-automatically generated with sympy
     
     //compute KKT matrix explicitly to simplify below expressions
@@ -717,6 +791,41 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
     //d2chi^2/dxdlambda (upper triangular block)
     Kinv.topRightCorner(nstateparms, nposparms) = Kinv.bottomLeftCorner(nposparms, nstateparms).transpose();
+    
+//     auto const& KinvSVD = Kinv.jacobiSvd(ComputeFullU | ComputeFullV);
+//     const unsigned int rank = ntotalhitdim + nmomparms + nposparms;
+//     const unsigned int rank = ntotalhitdim + nmomparms;
+//     MatrixXd tmp = KinvSVD.matrixU().leftCols(rank).adjoint();
+//     tmp = KinvSVD.singularValues().head(rank).asDiagonal().inverse() * tmp;
+//     MatrixXd K = KinvSVD.matrixV().leftCols(rank) * tmp;
+//     VectorXd svals = KinvSVD.singularValues();
+//     svals = svals.cwiseInverse();
+//     svals.tail(nstateparms+nposparms-rank) = VectorXd::Zero(nstateparms+nposparms-rank);
+//     const MatrixXd K = KinvSVD.matrixV()*DiagonalMatrix<double, Dynamic, Dynamic>(svals)*KinvSVD.matrixU().transpose();
+    
+//     auto const& KinvQR = Kinv.colPivHouseholderQr();
+//     std::cout
+    
+//     const MatrixXd K = Kinv.inverse();
+//     auto const& KinvQR = Kinv.colPivHouseholderQr();
+//     auto const& KinvLU = Kinv.fullPivLu();
+//     if (!KinvLU.isInvertible()) {
+//       std::cout << "Abort: KKT matrix not invertible" << std::endl;
+//       continue;
+//     }
+//     EigenSolver<MatrixXd> estest(Cinvtest, false);
+//     std::cout << "Cinvtest eigenvalues" << estest.eigenvalues() << std::endl;
+    
+    std::cout << "nhits: " << nhits << std::endl;
+    std::cout << "rank: " << rank << std::endl;
+    std::cout << "SVD Rank: " << KinvSVD.rank() << std::endl;
+//     EigenSolver<MatrixXd> es(Kinv, false);
+//     std::cout << "Kinv eigenvalues" << std::endl << es.eigenvalues() << std::endl;
+//     EigenSolver<MatrixXd> estest(Kinv.topLeftCorner(nstateparms,nstateparms), false);
+//     std::cout << "Kinvxx eigenvalues" << std::endl << estest.eigenvalues() << std::endl;
+
+
+    
     
     const MatrixXd K = Kinv.inverse();
     auto const& Kxx = K.topLeftCorner(nstateparms, nstateparms);
