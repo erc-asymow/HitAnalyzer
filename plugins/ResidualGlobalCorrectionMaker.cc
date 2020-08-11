@@ -48,6 +48,10 @@
 #include "TrackingTools/TrackFitters/interface/TrajectoryStateCombiner.h"
 #include "TrackingTools/PatternTools/interface/TrajTrackAssociation.h"
 #include "DataFormats/TrackerRecHit2D/interface/TkCloner.h"
+#include "DataFormats/TrackingRecHit/interface/KfComponentsHolder.h"
+#include "DataFormats/Math/interface/invertPosDefMatrix.h"
+#include "DataFormats/Math/interface/ProjectMatrix.h"
+
 
 
 // #include "../interface/OffsetMagneticField.h"
@@ -119,8 +123,11 @@ private:
   //virtual void endRun(edm::Run const&, edm::EventSetup const&) override;
   //virtual void beginLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
   //virtual void endLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
-  
-  
+
+  template <unsigned int D>
+  AlgebraicVector5 lupdate(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit);
+
+  AlgebraicVector5 update(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit);
 
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
@@ -164,6 +171,10 @@ private:
   
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
   
+  unsigned int run;
+  unsigned int lumi;
+  unsigned long long event;
+  
 };
 
 //
@@ -190,7 +201,8 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 
 
 //   fout = new TFile("trackTreeGrads.root", "RECREATE");
-  fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
+//   fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
+  fout = new TFile("trackTreeGradsdebug2.root", "RECREATE");
   //TODO this needs a newer root version
 //   fout->SetCompressionAlgorithm(ROOT::kLZ4);
 //   fout->SetCompressionLevel(3);
@@ -227,6 +239,10 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   tree->Branch("nSym", &nSym, basketSize);
   
   tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+  
+  tree->Branch("run", &run);
+  tree->Branch("lumi", &lumi);
+  tree->Branch("event", &event);
 
 }
 
@@ -289,6 +305,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //   TkClonerImpl hitCloner;
 //   TKCloner const* cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(builder)->cloner()
 //   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
+  
+  
+  run = iEvent.run();
+  lumi = iEvent.luminosityBlock();
+  event = iEvent.id().event();
   
   for (unsigned int j=0; j<trajH->size(); ++j) {
     const Trajectory& traj = (*trajH)[j];
@@ -488,6 +509,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         }
       }
       
+//       std::cout << "dy0:" << std::endl;
+//       std::cout << dy0.segment<2>(2*i) << std::endl;
+//       std::cout << "Vinv:" << std::endl;
+//       std::cout << Vinv.block<2,2>(2*i, 2*i) << std::endl;
+      
       JacobianCurvilinearToLocal h(backupdtsos.surface(), backupdtsos.localParameters(), *backupdtsos.magneticField());
       const AlgebraicMatrix55 &jach = h.jacobian();
       //efficient assignment from SMatrix using Eigen::Map
@@ -526,10 +552,21 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         Hproppos.block<2,5>(2*(i-1), 5*(i-1)) = jachpropeig.bottomRows<2>();
         
         //kink residuals are equal to the update applied to the state by the current hit
-        AlgebraicVector5 const& idx0 = backupdtsos.localParameters().vector() - backpredtsos.localParameters().vector();        
-        Map<const Vector5d> idx0eig(idx0.Array());
-        dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
-        dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
+//         AlgebraicVector5 const& idx0 = backupdtsos.localParameters().vector() - backpredtsos.localParameters().vector();        
+//         Map<const Vector5d> idx0eig(idx0.Array());
+//         dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
+//         dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
+   
+        if (hit->isValid()) {
+          AlgebraicVector5 const& idx0 = update(backpredtsos, *hit);
+          if (idx0 == AlgebraicVector5()) {
+            valid = false;
+            break;
+          }
+          Map<const Vector5d> idx0eig(idx0.Array());
+          dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
+          dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
+        }
         
         //propagate the previous updated state outside-in as in the smoother to compute the path length
         //use the geometrical propagator since the material effects are dealt with separately
@@ -730,6 +767,39 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 
       }
       currtsos = backupdtsos;
+      
+      std::cout << "meas: " << i << std::endl;
+      std::cout << "dy0:" << std::endl;
+      std::cout << dy0.segment<2>(2*i) << std::endl;
+      std::cout << "Vinv:" << std::endl;
+      std::cout << Vinv.block<2,2>(2*i, 2*i) << std::endl;
+      std::cout << "Hh:" << std::endl;
+      std::cout << Hh.block<2,5>(2*i, 5*i) << std::endl;
+      if (i>0) {
+        std::cout << "dx0mom" << std::endl;
+        std::cout << dx0mom.segment<3>(3*(i-1)) << std::endl;
+        std::cout << "dx0pos" << std::endl;
+        std::cout << dx0pos.segment<2>(2*(i-1)) << std::endl;
+        std::cout << "Qinv" << std::endl;        
+        std::cout << Qinv.block<3,3>(3*(i-1), 3*(i-1)) << std::endl;
+        std::cout << "Qinvpos" << std::endl;        
+        std::cout << Qinvpos.block<2,2>(2*(i-1), 2*(i-1)) << std::endl;
+        std::cout << "F" << std::endl;        
+        std::cout << F.block<3,3>(3*(i-1), 3*(i-1)) << std::endl;
+        std::cout << "Hmom:" << std::endl;
+        std::cout << Hmom.block<3,5>(3*(i-1), 5*i) << std::endl;
+        std::cout << "Hpos:" << std::endl;
+        std::cout << Hpos.block<2,5>(2*(i-1), 5*i) << std::endl;     
+        std::cout << "Hpropmom:" << std::endl;
+        std::cout << Hpropmom.block<3,5>(3*(i-1), 5*(i-1)) << std::endl;
+        std::cout << "Hproppos:" << std::endl;
+        std::cout << Hproppos.block<2,5>(2*(i-1), 5*(i-1)) << std::endl;   
+      }
+      std::cout << "backupdtsos local parameters" << std::endl;
+      std::cout << backupdtsos.localParameters().vector() << std::endl;
+      std::cout << "xi" << std::endl;
+      std::cout << backupdtsos.surface().mediumProperties().xi() << std::endl;
+      
     }
     
     if (!valid) {
@@ -776,79 +846,26 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     MatrixXd hess = MatrixXd::Zero(npars, npars);
     Matrix<double, 5, Dynamic> jacref = Matrix<double, 5, Dynamic>::Zero(5, npars);
     
-//     MatrixXd Cinvtest = 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom) + 2*Hh.transpose()*Vinv*Hh + 2*(Hpos-Hproppos*F).transpose()*Qinvpos*(Hpos-Hproppos*F);
-    
-    //expressions for gradients semi-automatically generated with sympy
-    
-    //compute KKT matrix explicitly to simplify below expressions
-    MatrixXd Kinv = MatrixXd::Zero(nstateparms + nposparms, nstateparms + nposparms);
-    
-    //d2chi^2/dx^2
-    Kinv.topLeftCorner(nstateparms, nstateparms) = 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom) + 2*Hh.transpose()*Vinv*Hh;
-
-    //d2chi^2/dxdlambda (lower triangular block)
-    Kinv.bottomLeftCorner(nposparms, nstateparms) = Hpos - Hproppos*F;
-
-    //d2chi^2/dxdlambda (upper triangular block)
-    Kinv.topRightCorner(nstateparms, nposparms) = Kinv.bottomLeftCorner(nposparms, nstateparms).transpose();
-    
-//     auto const& KinvSVD = Kinv.jacobiSvd(ComputeFullU | ComputeFullV);
-//     const unsigned int rank = ntotalhitdim + nmomparms + nposparms;
-//     const unsigned int rank = ntotalhitdim + nmomparms;
-//     MatrixXd tmp = KinvSVD.matrixU().leftCols(rank).adjoint();
-//     tmp = KinvSVD.singularValues().head(rank).asDiagonal().inverse() * tmp;
-//     MatrixXd K = KinvSVD.matrixV().leftCols(rank) * tmp;
-//     VectorXd svals = KinvSVD.singularValues();
-//     svals = svals.cwiseInverse();
-//     svals.tail(nstateparms+nposparms-rank) = VectorXd::Zero(nstateparms+nposparms-rank);
-//     const MatrixXd K = KinvSVD.matrixV()*DiagonalMatrix<double, Dynamic, Dynamic>(svals)*KinvSVD.matrixU().transpose();
-    
-//     auto const& KinvQR = Kinv.colPivHouseholderQr();
-//     std::cout
-    
-//     const MatrixXd K = Kinv.inverse();
-//     auto const& KinvQR = Kinv.colPivHouseholderQr();
-//     auto const& KinvLU = Kinv.fullPivLu();
-//     if (!KinvLU.isInvertible()) {
-//       std::cout << "Abort: KKT matrix not invertible" << std::endl;
-//       continue;
-//     }
-//     EigenSolver<MatrixXd> estest(Cinvtest, false);
-//     std::cout << "Cinvtest eigenvalues" << estest.eigenvalues() << std::endl;
-    
-    std::cout << "nhits: " << nhits << std::endl;
-    std::cout << "rank: " << rank << std::endl;
-    std::cout << "SVD Rank: " << KinvSVD.rank() << std::endl;
-//     EigenSolver<MatrixXd> es(Kinv, false);
-//     std::cout << "Kinv eigenvalues" << std::endl << es.eigenvalues() << std::endl;
-//     EigenSolver<MatrixXd> estest(Kinv.topLeftCorner(nstateparms,nstateparms), false);
-//     std::cout << "Kinvxx eigenvalues" << std::endl << estest.eigenvalues() << std::endl;
-
-
-    
-    
-    const MatrixXd K = Kinv.inverse();
-    auto const& Kxx = K.topLeftCorner(nstateparms, nstateparms);
-    auto const& Kxlam = K.topRightCorner(nstateparms, nposparms);
-    auto const& Klamlam = K.bottomRightCorner(nposparms, nposparms);
+    //compute covariance explicitly to simplify below expressions
+    const MatrixXd C = (2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F) + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom) + 2*Hh.transpose()*Vinv*Hh).ldlt().solve(MatrixXd::Identity(nstateparms,nstateparms));
 
     //compute shift in parameters at reference point from matrix model given hit and kink residuals
     //(but for nominal values of the model correction
-    Vector5d dxRef = Fref*(-Kxlam*dx0pos - 2*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom + 2*Kxx*Hh.transpose()*Vinv*dy0);
+    Vector5d dxRef = -Fref*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0);
     
     //fill output with corrected state and covariance at reference point
     refParms.fill(0.);
     refCov.fill(0.);
     const AlgebraicVector5& refVec = track.parameters();
     Map<Vector5f>(refParms.data()) = (Map<const Vector5d>(refVec.Array()) + dxRef).cast<float>();
-    Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Fref*Kxx*Fref.transpose()).cast<float>().triangularView<Upper>();
+    Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Fref*C*Fref.transpose()).cast<float>().triangularView<Upper>();
     
     //set jacobian for reference point parameters
-    jacref.leftCols(nparsAlignment) = -2*Fref*Kxx*Hh.transpose()*Vinv*A;
+    jacref.leftCols(nparsAlignment) = -2*Fref*C*Hh.transpose()*Vinv*A;
 
-    jacref.block<5, Dynamic>(0, nparsAlignment, 5, nparsBfield) = Fref*(Kxlam*Hproppos*dF + 2*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF);
+    jacref.block<5, Dynamic>(0, nparsAlignment, 5, nparsBfield) = Fref*(2*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 2*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF);
     
-    jacref.rightCols(nparsEloss) = 2*Fref*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE;
+    jacref.rightCols(nparsEloss) = 2*Fref*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE;
     
     jacrefout = jacref.cast<float>();
     
@@ -856,34 +873,41 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     std::cout << jacref << std::endl;
     
     //set gradients
-    grad.head(nparsAlignment) = -2*A.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0) - 2*A.transpose()*Vinv*Hh*Kxlam*((Hpos - Hproppos*F)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0pos) - 2*A.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) - 4*A.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) + 4*A.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0);
+    grad.head(nparsAlignment) = -2*A.transpose()*Vinv*(Hh*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dy0) - 4*A.transpose()*Vinv*Hh*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) - 4*A.transpose()*Vinv*Hh*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) + 4*A.transpose()*Vinv*Hh*C.transpose()*Hh.transpose()*Vinv*(Hh*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dy0);
 
-    grad.segment(nparsAlignment,nparsBfield) = -2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*((Hpos - Hproppos*F)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0pos) + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0) - dF.transpose()*Hproppos.transpose()*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dF.transpose()*Hproppos.transpose()*Klamlam*((Hpos - Hproppos*F)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0pos) + dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) - 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0);
+    grad.segment(nparsAlignment,nparsBfield) = -2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*(Hh*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dy0) - 2*dF.transpose()*Hproppos.transpose()*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) + 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) + 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) - 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*Hh.transpose()*Vinv*(Hh*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dy0);
     
-    grad.tail(nparsEloss) = -2*dE.transpose()*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) + 2*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*((Hpos - Hproppos*F)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0pos) + 2*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*(-Klamlam*dx0pos - Kxlam.transpose()*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*((-E*Hpropmom*F + Hmom)*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dx0mom) - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*(-Hh*(-Kxlam*dx0pos - Kxx*(2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0)) + dy0);
+    grad.tail(nparsEloss) = -2*dE.transpose()*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*(Hh*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dy0);
+    
+    std::cout << "max grad element = " << grad.cwiseAbs().maxCoeff() << std::endl;
     
     gradout = grad.cast<float>();
     
+    std::cout << "max gradout element = " << gradout.cwiseAbs().maxCoeff() << std::endl;
+    
+//     std::cout << "max gradv element = " << *std::max_element(gradv.begin(), gradv.end()) << std::endl;
+
+    
     //fill hessian (diagonal blocks, upper triangular part only)
-    hess.topLeftCorner(nparsAlignment, nparsAlignment).triangularView<Upper>() = (2*A.transpose()*Vinv*A + 4*A.transpose()*Vinv*Hh*Kxlam*(Hpos - Hproppos*F)*Kxx*Hh.transpose()*Vinv*A + 4*A.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A - 8*A.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A).triangularView<Upper>();
+    hess.topLeftCorner(nparsAlignment, nparsAlignment).triangularView<Upper>() = (2*A.transpose()*Vinv*A - 4*A.transpose()*Vinv*Hh*C*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*Hh.transpose()*Vinv*A - 4*A.transpose()*Vinv*Hh*C.transpose()*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*C.transpose()*Hh.transpose()*Vinv*Hh*C*Hh.transpose()*Vinv*A).triangularView<Upper>();
     
-    hess.block(nparsAlignment, nparsAlignment, nparsBfield, nparsBfield).triangularView<Upper>() = (2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxlam*Hproppos*dF + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Klamlam*Hproppos*dF + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxlam*Hproppos*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*E*Hpropmom*dF + dF.transpose()*Hproppos.transpose()*Klamlam*(Hpos - Hproppos*F)*Kxlam*Hproppos*dF + 2*dF.transpose()*Hproppos.transpose()*Klamlam*(Hpos - Hproppos*F)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 2*dF.transpose()*Hproppos.transpose()*Klamlam*Hproppos*dF + dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Klamlam*Hproppos*dF + 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*Hh*Kxlam*Hproppos*dF + 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF).triangularView<Upper>();
+    hess.block(nparsAlignment, nparsAlignment, nparsBfield, nparsBfield).triangularView<Upper>() = (-4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF - 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dF.transpose()*Hproppos.transpose()*Qinvpos*Hproppos*dF).triangularView<Upper>();
     
-    hess.bottomRightCorner(nparsEloss,nparsEloss).triangularView<Upper>() = (4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 2*dE.transpose()*Qinv*dE).triangularView<Upper>();
+    hess.bottomRightCorner(nparsEloss,nparsEloss).triangularView<Upper>() = (-4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dE + 2*dE.transpose()*Qinv*dE).triangularView<Upper>();
     
     //fill hessian off-diagonal blocks (upper triangular part)
-    hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = -4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*Hh.transpose()*Vinv*A - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A + 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A - 2*dF.transpose()*Hproppos.transpose()*Klamlam*(Hpos - Hproppos*F)*Kxx*Hh.transpose()*Vinv*A - 2*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*Hh.transpose()*Vinv*A - 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A + 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*A - 4*dF.transpose()*Hproppos.transpose()*Kxlam.transpose()*Hh.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A;
+    hess.transpose().block(nparsAlignment, 0, nparsBfield, nparsAlignment) = 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*Hh.transpose()*Vinv*A + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*Hh.transpose()*Vinv*A + 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*Hh.transpose()*Vinv*A + 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*Hh.transpose()*Vinv*A - 8*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*Hh.transpose()*Vinv*Hh*C*Hh.transpose()*Vinv*A;
     
-    hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = -4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*Hh.transpose()*Vinv*A - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*Hh.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*Hh.transpose()*Vinv*A;
+    hess.transpose().block(nparsAlignment+nparsBfield, 0, nparsEloss, nparsAlignment) = 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*Hh.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*Hh.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*Hh.transpose()*Vinv*A + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*A - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*Hh.transpose()*Vinv*A;
     
     //careful this is easy to screw up because it is "accidentally" symmetric
-    hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = 2*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxlam*Hproppos*dF + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*(Hpos - Hproppos*F)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 2*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Klamlam*Hproppos*dF + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Kxlam.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxlam*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxlam*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*Kxx*Hh.transpose()*Vinv*Hh*Kxx*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dE.transpose()*Qinv*E*Hpropmom*dF;    
+    hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = -4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dE.transpose()*Qinv*E*Hpropmom*dF;
     
     std::cout << "hess debug" << std::endl;
     std::cout << "original cov" << std::endl;
     std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
     std::cout << "recomputed cov" << std::endl;
-    std::cout << 2*Kxx.bottomRightCorner<5,5>() << std::endl;
+    std::cout << 2*C.bottomRightCorner<5,5>() << std::endl;
     
     
 /*    std::cout << "hess debug" << std::endl;
@@ -1097,6 +1121,63 @@ void ResidualGlobalCorrectionMaker::fillDescriptions(edm::ConfigurationDescripti
   edm::ParameterSetDescription desc;
   desc.setUnknown();
   descriptions.addDefault(desc);
+}
+
+template <unsigned int D>
+AlgebraicVector5 ResidualGlobalCorrectionMaker::lupdate(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit) {
+  typedef typename AlgebraicROOTObject<D, 5>::Matrix MatD5;
+  typedef typename AlgebraicROOTObject<5, D>::Matrix Mat5D;
+  typedef typename AlgebraicROOTObject<D, D>::SymMatrix SMatDD;
+  typedef typename AlgebraicROOTObject<D>::Vector VecD;
+  using ROOT::Math::SMatrixNoInit;
+
+  auto&& x = tsos.localParameters().vector();
+  auto&& C = tsos.localError().matrix();
+
+  // projection matrix (assume element of "H" to be just 0 or 1)
+  ProjectMatrix<double, 5, D> pf;
+
+  // Measurement matrix
+  VecD r, rMeas;
+  SMatDD V(SMatrixNoInit{}), VMeas(SMatrixNoInit{});
+
+  KfComponentsHolder holder;
+  holder.template setup<D>(&r, &V, &pf, &rMeas, &VMeas, x, C);
+  aRecHit.getKfComponents(holder);
+
+  r -= rMeas;
+
+  // and covariance matrix of residuals
+  SMatDD R = V + VMeas;
+  bool ok = invertPosDefMatrix(R);
+  if (!ok) {
+    return AlgebraicVector5();
+  }
+
+  // Compute Kalman gain matrix
+  AlgebraicMatrix55 M = AlgebraicMatrixID();
+  Mat5D K = C * pf.project(R);
+  pf.projectAndSubtractFrom(M, K);
+
+  // Compute local filtered state vector
+  AlgebraicVector5 fsvdiff = K * r;
+  return fsvdiff;
+}
+
+AlgebraicVector5 ResidualGlobalCorrectionMaker::update(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit) {
+  switch (aRecHit.dimension()) {
+    case 1:
+      return lupdate<1>(tsos, aRecHit);
+    case 2:
+      return lupdate<2>(tsos, aRecHit);
+    case 3:
+      return lupdate<3>(tsos, aRecHit);
+    case 4:
+      return lupdate<4>(tsos, aRecHit);
+    case 5:
+      return lupdate<5>(tsos, aRecHit);
+  }
+  return AlgebraicVector5();
 }
 
 //define this as a plug-in
