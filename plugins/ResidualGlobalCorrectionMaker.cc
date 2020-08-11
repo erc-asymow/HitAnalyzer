@@ -200,9 +200,9 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
 
-//   fout = new TFile("trackTreeGrads.root", "RECREATE");
+  fout = new TFile("trackTreeGrads.root", "RECREATE");
 //   fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
-  fout = new TFile("trackTreeGradsdebug2.root", "RECREATE");
+//   fout = new TFile("trackTreeGradsdebug2.root", "RECREATE");
   //TODO this needs a newer root version
 //   fout->SetCompressionAlgorithm(ROOT::kLZ4);
 //   fout->SetCompressionLevel(3);
@@ -301,11 +301,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   PropagatorWithMaterial rPropagator(oppositeToMomentum, mass, field, maxDPhi, true, -1., false);
   PropagatorWithMaterial fPropagator(alongMomentum, mass, field, maxDPhi, true, -1., false);
   
-  KFUpdator updator;
+//   KFUpdator updator;
 //   TkClonerImpl hitCloner;
 //   TKCloner const* cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(builder)->cloner()
 //   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
-  
+//   TrajectoryStateCombiner combiner;
   
   run = iEvent.run();
   lumi = iEvent.luminosityBlock();
@@ -467,35 +467,38 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       TrajectoryMeasurement const& tm = tms[i];
       auto const& hit = tm.recHit();
-      TrajectoryStateOnSurface const& backpredtsos = tm.backwardPredictedState();
+//       TrajectoryStateOnSurface const& backpredtsos = tm.backwardPredictedState();
+//       TrajectoryStateOnSurface const& fwdpredtsos = tm.forwardPredictedState();
+//       TrajectoryStateOnSurface updtsos = combiner(backpredtsos, fwdpredtsos);
+      TrajectoryStateOnSurface const& updtsos = tm.updatedState();
       const GeomDet *detectorG = globalGeometry->idToDet(hit->geographicalId());
             
-      if (!backpredtsos.isValid()) {
-        std::cout << "Abort: backpredtsos invalid" << std::endl;
+      if (!updtsos.isValid()) {
+        std::cout << "Abort: updtsos invalid" << std::endl;
         valid = false;
         break;
       }
       
-      TrajectoryStateOnSurface backupdtsos(backpredtsos);
+//       TrajectoryStateOnSurface backupdtsos(backpredtsos);
       
       //hit information
       if (hit->isValid()) {
         ntotalhitdim += std::min(hit->dimension(), 2);
         //update state if hit is valid
-        backupdtsos = updator.update(backpredtsos, *hit);
-        if (!backupdtsos.isValid()) {
-          std::cout << "Abort: hit update failed" << std::endl;
-          valid = false;
-          break;
-        }
+//         backupdtsos = updator.update(backpredtsos, *hit);
+//         if (!backupdtsos.isValid()) {
+//           std::cout << "Abort: hit update failed" << std::endl;
+//           valid = false;
+//           break;
+//         }
         
         //fill x residual
-        dy0(2*i) = hit->localPosition().x() - backupdtsos.localPosition().x();
+        dy0(2*i) = hit->localPosition().x() - updtsos.localPosition().x();
         
         //check for 2d hits
         if (hit->dimension()>1) {
           //fill y residual
-          dy0(2*i+1) = hit->localPosition().y() - backupdtsos.localPosition().y();
+          dy0(2*i+1) = hit->localPosition().y() - updtsos.localPosition().y();
           
           //compute 2x2 covariance matrix and invert
           Matrix2d iV;
@@ -514,7 +517,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //       std::cout << "Vinv:" << std::endl;
 //       std::cout << Vinv.block<2,2>(2*i, 2*i) << std::endl;
       
-      JacobianCurvilinearToLocal h(backupdtsos.surface(), backupdtsos.localParameters(), *backupdtsos.magneticField());
+      JacobianCurvilinearToLocal h(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
       const AlgebraicMatrix55 &jach = h.jacobian();
       //efficient assignment from SMatrix using Eigen::Map
       Map<const Matrix<double, 5, 5, RowMajor> > jacheig(jach.Array());
@@ -542,35 +545,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         //fill jacobians for nominal state
         Hmom.block<3,5>(3*(i-1), 5*i) = jacheig.topRows<3>();
         Hpos.block<2,5>(2*(i-1), 5*i) = jacheig.bottomRows<2>();
-
-        //backwards predicted state is equivalent to the backward propagated state from the previous layer (outside-in)
-        JacobianCurvilinearToLocal hprop(backpredtsos.surface(), backpredtsos.localParameters(), *backpredtsos.magneticField());
-        const AlgebraicMatrix55 &jachprop = hprop.jacobian();
-        //efficient assignment from SMatrix using Eigen::Map
-        Map<const Matrix<double, 5, 5, RowMajor> > jachpropeig(jachprop.Array());
-        Hpropmom.block<3,5>(3*(i-1), 5*(i-1)) = jachpropeig.topRows<3>();
-        Hproppos.block<2,5>(2*(i-1), 5*(i-1)) = jachpropeig.bottomRows<2>();
-        
-        //kink residuals are equal to the update applied to the state by the current hit
-//         AlgebraicVector5 const& idx0 = backupdtsos.localParameters().vector() - backpredtsos.localParameters().vector();        
-//         Map<const Vector5d> idx0eig(idx0.Array());
-//         dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
-//         dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
-   
-        if (hit->isValid()) {
-          AlgebraicVector5 const& idx0 = update(backpredtsos, *hit);
-          if (idx0 == AlgebraicVector5()) {
-            valid = false;
-            break;
-          }
-          Map<const Vector5d> idx0eig(idx0.Array());
-          dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
-          dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
-        }
         
         //propagate the previous updated state outside-in as in the smoother to compute the path length
         //use the geometrical propagator since the material effects are dealt with separately
-        auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(currtsos, backpredtsos.surface());
+        auto const& propresult = rPropagator.geometricalPropagator().propagateWithPath(currtsos, updtsos.surface());
         if (!propresult.first.isValid()) {
           std::cout << "Abort: propagation failed" << std::endl;
           valid = false;
@@ -713,14 +691,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         globalidxv[nparsAlignment + nparsBfield + elossidx] = elossglobalidx;
         elossidx++;
        
-//         const double oldqop = proptsos.localParameters().vector()[0];
         //apply material effects in reverse
         //zero local errors to directly access the process noise matrix
+        //and force the state to be on the correct side
         proptsos.update(proptsos.localParameters(),
                        LocalTrajectoryError(0.,0.,0.,0.,0.),
                        proptsos.surface(),
                        proptsos.magneticField(),
-                       proptsos.surfaceSide());
+                       SurfaceSideDefinition::afterSurface);
         
         //apply the state update from the material effects (in reverse)
         bool ok = rPropagator.materialEffectsUpdator().updateStateInPlace(proptsos, rpropdir);
@@ -743,62 +721,54 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         Qinvpos(2*(i-1), 2*(i-1)) = 1./epsxy/epsxy;
         Qinvpos(2*(i-1)+1, 2*(i-1)+1) = 1./epsxy/epsxy;
         
-//         double qopratio = proptsos.localParameters().vector()[0]/oldqop;
-//         
-//         std::cout << "iQ" << std::endl;
-//         std::cout << iQ << std::endl;
-//         std::cout << "qopratio" << std::endl;
-//         std::cout << qopratio << std::endl;
-//         
-//         
-// //         AlgebraicVector5 elossdiff = tmptsos.localParameters().vector() - propresult.first.localParameters().vector();
-// //         std::cout << "idx0eig" << std::endl;
-// //         std::cout << idx0eig << std::endl;
-//         std::cout << "backupdtsos" << std::endl;
-//         std::cout << backupdtsos.localParameters().vector() << std::endl;
+        //fill jacobians for backwards propagated state
+        JacobianCurvilinearToLocal hprop(proptsos.surface(), proptsos.localParameters(), *proptsos.magneticField());
+        const AlgebraicMatrix55 &jachprop = hprop.jacobian();
+        //efficient assignment from SMatrix using Eigen::Map
+        Map<const Matrix<double, 5, 5, RowMajor> > jachpropeig(jachprop.Array());
+        Hpropmom.block<3,5>(3*(i-1), 5*(i-1)) = jachpropeig.topRows<3>();
+        Hproppos.block<2,5>(2*(i-1), 5*(i-1)) = jachpropeig.bottomRows<2>();
+        
+        //compute kink residuals
+        AlgebraicVector5 const& idx0 = updtsos.localParameters().vector() - proptsos.localParameters().vector();        
+        Map<const Vector5d> idx0eig(idx0.Array());
+        dx0mom.segment<3>(3*(i-1)) = idx0eig.head<3>();
+        dx0pos.segment<2>(2*(i-1)) = idx0eig.tail<2>();
+                
+      }
+      currtsos = updtsos;
+      
+//       std::cout << "meas: " << i << std::endl;
+//       std::cout << "dy0:" << std::endl;
+//       std::cout << dy0.segment<2>(2*i) << std::endl;
+//       std::cout << "Vinv:" << std::endl;
+//       std::cout << Vinv.block<2,2>(2*i, 2*i) << std::endl;
+//       std::cout << "Hh:" << std::endl;
+//       std::cout << Hh.block<2,5>(2*i, 5*i) << std::endl;
+//       if (i>0) {
 //         std::cout << "dx0mom" << std::endl;
 //         std::cout << dx0mom.segment<3>(3*(i-1)) << std::endl;
 //         std::cout << "dx0pos" << std::endl;
 //         std::cout << dx0pos.segment<2>(2*(i-1)) << std::endl;
-// //         std::cout << "elossdiff" << std::endl;
-// //         std::cout << elossdiff << std::endl;
 //         std::cout << "Qinv" << std::endl;        
-//         std::cout << Qinv.block<3,3>(3*(i-1), 3*(i-1)) << std::endl; 
-                
-      }
-      currtsos = backupdtsos;
-      
-      std::cout << "meas: " << i << std::endl;
-      std::cout << "dy0:" << std::endl;
-      std::cout << dy0.segment<2>(2*i) << std::endl;
-      std::cout << "Vinv:" << std::endl;
-      std::cout << Vinv.block<2,2>(2*i, 2*i) << std::endl;
-      std::cout << "Hh:" << std::endl;
-      std::cout << Hh.block<2,5>(2*i, 5*i) << std::endl;
-      if (i>0) {
-        std::cout << "dx0mom" << std::endl;
-        std::cout << dx0mom.segment<3>(3*(i-1)) << std::endl;
-        std::cout << "dx0pos" << std::endl;
-        std::cout << dx0pos.segment<2>(2*(i-1)) << std::endl;
-        std::cout << "Qinv" << std::endl;        
-        std::cout << Qinv.block<3,3>(3*(i-1), 3*(i-1)) << std::endl;
-        std::cout << "Qinvpos" << std::endl;        
-        std::cout << Qinvpos.block<2,2>(2*(i-1), 2*(i-1)) << std::endl;
-        std::cout << "F" << std::endl;        
-        std::cout << F.block<3,3>(3*(i-1), 3*(i-1)) << std::endl;
-        std::cout << "Hmom:" << std::endl;
-        std::cout << Hmom.block<3,5>(3*(i-1), 5*i) << std::endl;
-        std::cout << "Hpos:" << std::endl;
-        std::cout << Hpos.block<2,5>(2*(i-1), 5*i) << std::endl;     
-        std::cout << "Hpropmom:" << std::endl;
-        std::cout << Hpropmom.block<3,5>(3*(i-1), 5*(i-1)) << std::endl;
-        std::cout << "Hproppos:" << std::endl;
-        std::cout << Hproppos.block<2,5>(2*(i-1), 5*(i-1)) << std::endl;   
-      }
-      std::cout << "backupdtsos local parameters" << std::endl;
-      std::cout << backupdtsos.localParameters().vector() << std::endl;
-      std::cout << "xi" << std::endl;
-      std::cout << backupdtsos.surface().mediumProperties().xi() << std::endl;
+//         std::cout << Qinv.block<3,3>(3*(i-1), 3*(i-1)) << std::endl;
+//         std::cout << "Qinvpos" << std::endl;        
+//         std::cout << Qinvpos.block<2,2>(2*(i-1), 2*(i-1)) << std::endl;
+//         std::cout << "F" << std::endl;        
+//         std::cout << F.block<3,3>(3*(i-1), 3*(i-1)) << std::endl;
+//         std::cout << "Hmom:" << std::endl;
+//         std::cout << Hmom.block<3,5>(3*(i-1), 5*i) << std::endl;
+//         std::cout << "Hpos:" << std::endl;
+//         std::cout << Hpos.block<2,5>(2*(i-1), 5*i) << std::endl;     
+//         std::cout << "Hpropmom:" << std::endl;
+//         std::cout << Hpropmom.block<3,5>(3*(i-1), 5*(i-1)) << std::endl;
+//         std::cout << "Hproppos:" << std::endl;
+//         std::cout << Hproppos.block<2,5>(2*(i-1), 5*(i-1)) << std::endl;   
+//       }
+//       std::cout << "updtsos local parameters" << std::endl;
+//       std::cout << updtsos.localParameters().vector() << std::endl;
+//       std::cout << "xi" << std::endl;
+//       std::cout << updtsos.surface().mediumProperties().xi() << std::endl;
       
     }
     
@@ -848,7 +818,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     //compute covariance explicitly to simplify below expressions
     const MatrixXd C = (2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F) + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom) + 2*Hh.transpose()*Vinv*Hh).ldlt().solve(MatrixXd::Identity(nstateparms,nstateparms));
-
+    
     //compute shift in parameters at reference point from matrix model given hit and kink residuals
     //(but for nominal values of the model correction
     Vector5d dxRef = -Fref*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0);
@@ -878,15 +848,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     grad.segment(nparsAlignment,nparsBfield) = -2*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) + 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) - 4*dF.transpose()*Hpropmom.transpose()*E.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*(Hh*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dy0) - 2*dF.transpose()*Hproppos.transpose()*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) + 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) + 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) - 4*dF.transpose()*Hproppos.transpose()*Qinvpos*(Hpos - Hproppos*F)*C.transpose()*Hh.transpose()*Vinv*(Hh*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dy0);
     
     grad.tail(nparsEloss) = -2*dE.transpose()*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(-(Hpos - Hproppos*F)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0pos) + 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-(-E*Hpropmom*F + Hmom)*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dx0mom) - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*(Hh*C*(2*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*dx0pos + 2*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*dx0mom - 2*Hh.transpose()*Vinv*dy0) + dy0);
-    
-    std::cout << "max grad element = " << grad.cwiseAbs().maxCoeff() << std::endl;
-    
+        
     gradout = grad.cast<float>();
-    
-    std::cout << "max gradout element = " << gradout.cwiseAbs().maxCoeff() << std::endl;
-    
-//     std::cout << "max gradv element = " << *std::max_element(gradv.begin(), gradv.end()) << std::endl;
-
     
     //fill hessian (diagonal blocks, upper triangular part only)
     hess.topLeftCorner(nparsAlignment, nparsAlignment).triangularView<Upper>() = (2*A.transpose()*Vinv*A - 4*A.transpose()*Vinv*Hh*C*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*Hh.transpose()*Vinv*A - 4*A.transpose()*Vinv*Hh*C.transpose()*Hh.transpose()*Vinv*A + 8*A.transpose()*Vinv*Hh*C.transpose()*Hh.transpose()*Vinv*Hh*C*Hh.transpose()*Vinv*A).triangularView<Upper>();
@@ -903,18 +866,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //careful this is easy to screw up because it is "accidentally" symmetric
     hess.transpose().block(nparsAlignment+nparsBfield, nparsAlignment, nparsEloss, nparsBfield) = -4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*(Hpos - Hproppos*F)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*(-E*Hpropmom*F + Hmom)*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF - 4*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hproppos.transpose() + Hpos.transpose())*Qinvpos*Hproppos*dF + 8*dE.transpose()*Qinv*(-E*Hpropmom*F + Hmom)*C.transpose()*Hh.transpose()*Vinv*Hh*C*(-F.transpose()*Hpropmom.transpose()*E.transpose() + Hmom.transpose())*Qinv*E*Hpropmom*dF + 2*dE.transpose()*Qinv*E*Hpropmom*dF;
     
-    std::cout << "hess debug" << std::endl;
-    std::cout << "original cov" << std::endl;
-    std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
-    std::cout << "recomputed cov" << std::endl;
-    std::cout << 2*C.bottomRightCorner<5,5>() << std::endl;
+//     std::cout << "hess debug" << std::endl;
+//     std::cout << "original cov" << std::endl;
+//     std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
+//     std::cout << "recomputed cov" << std::endl;
+//     std::cout << 2*C.bottomRightCorner<5,5>() << std::endl;
     
-    
-/*    std::cout << "hess debug" << std::endl;
-    std::cout << "top right corner:" << std::endl;
-    std::cout << hess.topRightCorner(10,10) << std::endl;
-    std::cout << "bottom left corner:" << std::endl;
-    std::cout << hess.bottomLeftCorner(10,10) << std::endl;  */  
     
     //fill packed hessian and indices
     const unsigned int nsym = npars*(1+npars)/2;
