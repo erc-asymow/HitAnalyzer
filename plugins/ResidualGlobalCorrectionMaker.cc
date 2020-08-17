@@ -153,7 +153,8 @@ private:
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
-  edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
+//   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
+  edm::EDGetTokenT<reco::TrackCollection> inputTrack_;
   edm::EDGetTokenT<reco::TrackCollection> inputTrackOrig_;
   edm::EDGetTokenT<std::vector<int> > inputIndices_;
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
@@ -167,14 +168,22 @@ private:
   float trackPtErr;
   float trackCharge;
 
+  float normalizedChi2;
+  
   float genPt;
   float genEta;
   float genPhi;
   float genCharge;
   
+  unsigned int nHits;
+  unsigned int nValidHits;
+  unsigned int nValidPixelHits;
   unsigned int nParms;
   unsigned int nJacRef;
   unsigned int nSym;
+  
+  std::array<float, 5> trackOrigParms;
+  std::array<float, 25> trackOrigCov;
   
   std::array<float, 5> trackParms;
   std::array<float, 25> trackCov;
@@ -215,7 +224,8 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   //now do what ever initialization is needed
   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
   GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
-  inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
+//   inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
+  inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
   inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
   inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag("generalTracks"));
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
@@ -239,6 +249,8 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   tree->Branch("trackPhi", &trackPhi, basketSize);
   tree->Branch("trackCharge", &trackCharge, basketSize);
   //workaround for older ROOT version inability to store std::array automatically
+  tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
+  tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
   tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
   tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
   tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
@@ -250,6 +262,11 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   tree->Branch("genPhi", &genPhi, basketSize);
   tree->Branch("genCharge", &genCharge, basketSize);
   
+  tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
+  
+  tree->Branch("nHits", &nHits, basketSize);
+  tree->Branch("nValidHits", &nValidHits, basketSize);
+  tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
   tree->Branch("nParms", &nParms, basketSize);
   tree->Branch("nJacRef", &nJacRef, basketSize);
   
@@ -300,7 +317,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
   iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
   
-  Handle<TrajTrackAssociationCollection> trackH;
+//   Handle<TrajTrackAssociationCollection> trackH;
+  Handle<reco::TrackCollection> trackH;
   iEvent.getByToken(inputTrack_, trackH);
   
   Handle<reco::TrackCollection> trackOrigH;
@@ -336,9 +354,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     const Trajectory& traj = (*trajH)[j];
     
     const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
-    const reco::Track& track = *(*trackH)[trajref];
+//     const reco::Track& track = *(*trackH)[trajref];
+    const reco::Track& track = (*trackH)[j];
 //     const reco::Track& trackOrig = (*trackOrigH)[(*indicesH)[j]];
 
+//     std::cout << "j " << j << " (*indicesH)[j] " << (*indicesH)[j] <<std::endl;
+    
     if (traj.isLooper()) {
       continue;
     }
@@ -347,6 +368,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     trackPhi = track.phi();
     trackCharge = track.charge();
     trackPtErr = track.ptError();
+    
+    normalizedChi2 = track.normalizedChi2();
     
 //     std::cout << "track pt: " << trackPt << " track eta: " << trackEta << " trackCharge: " << trackCharge << " qop: " << track.parameters()[0] << std::endl;
     
@@ -358,7 +381,23 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     Map<Vector5f>(trackParms.data()) = Map<const Vector5d>(tkparms.Array()).cast<float>();
     Map<Matrix<float, 5, 5, RowMajor> >(trackCov.data()).triangularView<Upper>() = Map<const Matrix<double, 5, 5, RowMajor> >(tkcov.Array()).cast<float>().triangularView<Upper>();
     
+
+    trackOrigParms.fill(0.);
+    trackOrigCov.fill(0.);
+    for (auto const& trackOrig : *trackOrigH) {
+      float dR = deltaR(trackOrig.phi(), trackPhi, trackOrig.eta(), trackEta);
+      
+      if (dR<0.15) {
+        auto const& tkorigparms = trackOrig.parameters();
+        auto const& tkorigcov = trackOrig.covariance();
+        Map<Vector5f>(trackOrigParms.data()) = Map<const Vector5d>(tkorigparms.Array()).cast<float>();
+        Map<Matrix<float, 5, 5, RowMajor> >(trackOrigCov.data()).triangularView<Upper>() = Map<const Matrix<double, 5, 5, RowMajor> >(tkorigcov.Array()).cast<float>().triangularView<Upper>();
+      }
+    }
+    
     const std::vector<TrajectoryMeasurement> &tms = traj.measurements();
+    
+//     std::cout << "track charge: " << track.charge() << " trackorig charge " << trackOrig.charge() << "inner state charge " << tms.back().updatedState().charge() << std::endl;
     
     genPt = -99.;
     genEta = -99.;
@@ -367,9 +406,15 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     genParms.fill(0.);
     for (std::vector<reco::GenParticle>::const_iterator g = genParticles.begin(); g != genParticles.end(); ++g)
     {
-
+      if (g->status() != 1) {
+        continue;
+      }
+      if (std::abs(g->pdgId()) != 13) {
+        continue;
+      }
+      
       float dR = deltaR(g->phi(), trackPhi, g->eta(), trackEta);
-
+      
       if (dR < 0.15)
       {
         genPt = g->pt();
@@ -405,6 +450,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     assert(fpropdir == alongMomentum);
     
     const unsigned int nhits = tms.size();
+    nHits = nhits;
 //     unsigned int npixhits = 0;
 
     unsigned int nvalid = 0;
@@ -423,6 +469,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         }
       }
     }
+    
+    nValidHits = nvalid;
+    nValidPixelHits = nvalidpixel;
     
 //     const unsigned int nstriphits = nhits-npixhits;
 //     const unsigned int nparsAlignment = nstriphits + 2*npixhits;
@@ -819,6 +868,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         MSJacobian F = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).cast<MSScalar>();
 //         Fb.block<5,5>(5*(i-1), 5*(i-1)) = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array());
        
+//         std::cout << "F" << std::endl;
+//         std::cout << jacF << std::endl;
+        
         //analytic jacobian wrt magnitude of magnetic field
         //TODO should we parameterize with respect to z-component instead?
         //extending derivation from CMS NOTE 2006/001
@@ -844,28 +896,33 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const double gamma = h.transpose()*T;
 
         //this is printed from sympy.printing.cxxcode together with sympy.cse for automatic substitution of common expressions
-        auto const xf0 = q*s/p;
-        auto const xf1 = magb*xf0;
-        auto const xf2 = std::cos(xf1);
-        auto const xf3 = 1.0/magb;
-        auto const xf4 = s*xf3;
-        auto const xf5 = std::sin(xf1);
-        auto const xf6 = p/q;
-        auto const xf7 = xf6/std::pow(magb, 2);
-        auto const xf8 = T0;
+        auto const xf0 = q/p;
+        auto const xf1 = s*xf0;
+        auto const xf2 = magb*xf1;
+        auto const xf3 = std::cos(xf2);
+        auto const xf4 = T0;
+        auto const xf5 = xf4;
+        auto const xf6 = std::sin(xf2);
+        auto const xf7 = alpha*xf6;
+        auto const xf8 = N0;
         auto const xf9 = xf8;
-        auto const xf10 = alpha*xf5;
-        auto const xf11 = 1 - xf2;
-        auto const xf12 = N0;
-        auto const xf13 = xf12;
-        auto const xf14 = xf0*xf2;
+        auto const xf10 = magb*xf0;
+        auto const xf11 = xf10*xf3;
+        auto const xf12 = 1.0/magb;
+        auto const xf13 = p/q;
+        auto const xf14 = gamma*xf12*xf13;
         auto const xf15 = h;
         auto const xf16 = xf15;
-        auto const xf17 = (xf2*xf4 - xf5*xf7)*xf9 + (alpha*xf11*xf7 - xf10*xf4)*xf13 + (-gamma*xf3*xf6*(-xf0 + xf14) + gamma*xf7*(-xf1 + xf5))*xf16;
-        auto const xf18 = (-xf10)*xf12.transpose() + xf2*(xf8.transpose()) + (gamma*xf11)*(xf15.transpose());
-        auto const xf19 = xf0*xf5;
-        auto const resf0 = xf17 - xf17*xf18*xf17;
-        auto const resf1 = (-p)*((-xf19)*xf9 + (-alpha*xf14)*xf13 + (gamma*xf19)*xf16)*xf18*xf17 + xf17;
+        auto const xf17 = 1 - xf3;
+        auto const xf18 = xf3*(xf4.transpose()) + (-xf7)*xf8.transpose() + (gamma*xf17)*(xf15.transpose());
+        auto const xf19 = s*xf12;
+        auto const xf20 = xf13/std::pow(magb, 2);
+        auto const xf21 = xf1*xf3;
+        auto const xf22 = (xf19*xf3 - xf20*xf6)*xf5 + (alpha*xf17*xf20 - xf19*xf7)*xf9 + (gamma*xf20*(-xf2 + xf6) - xf14*(-xf1 + xf21))*xf16;
+        auto const xf23 = xf1*xf6;
+        auto const xf24 = xf10*xf6;
+        auto const resf0 = -(xf3*xf5 + (-xf7)*xf9 + (-xf14*(-xf10 + xf11))*xf16)*xf18*xf22 + xf22;
+        auto const resf1 = (-p)*((-xf24)*xf5 + (-alpha*xf11)*xf9 + (gamma*xf24)*xf16)*xf18*xf22 + p*(((-xf23)*xf5 + (-alpha*xf21)*xf9 + (gamma*xf23)*xf16));
 
         const Vector3d dMdB = resf0;
         const Vector3d dPdB = resf1;
@@ -881,7 +938,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
         //compute final jacobian (and convert to Tesla)
         Matrix<MSScalar, 5, 1> dF = (2.99792458e-3*cart2curvjac*dFglobal).cast<MSScalar>();
+        //q/p element is exactly 0 by construction
+        dF(0,0) = MSScalar(0.);
+        
 //         dFb.block<5,1>(5*(i-1), bfieldidx) = 2.99792458e-3*cart2curvjac*dFglobal;
+//         std::cout << "dF = " << 2.99792458e-3*cart2curvjac*dFglobal << std::endl; 
         
 //         std::cout << "dF = " << dF.block<5,1>(5*i, bfieldidx) << std::endl;
         
@@ -938,6 +999,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const double res_2 = -dydz*x26;
         const double res_3 = -x20*x25;
 
+//         std::cout << "E res" << std::endl;
+//         std::cout << res_0 << " " << res_1 << " " << res_2 << " " << res_3 << std::endl;
+        
         MSJacobian E = MSJacobian::Identity();
         E(0,0) = MSScalar(res_0);
         E(0,1) = MSScalar(res_1);
@@ -1047,13 +1111,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     auto const& dchisqdparms = gradfull.tail(npars);
 
     //fill in lower triangular part where needed
+    hessfull.topLeftCorner(nstateparms, nstateparms).triangularView<StrictlyLower>() = hessfull.topLeftCorner(nstateparms, nstateparms).triangularView<StrictlyUpper>().transpose();
     hessfull.bottomRightCorner(npars, npars).triangularView<StrictlyLower>() = hessfull.bottomRightCorner(npars, npars).triangularView<StrictlyUpper>().transpose();
     
     auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
     auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
     auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
     
-    auto const& Cinvd = d2chisqdx2.selfadjointView<Upper>().ldlt();
+    auto const& Cinvd = d2chisqdx2.ldlt();
     
     const Vector5d dxRef = -Fref*Cinvd.solve(dchisqdx).tail<5>();
     const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).bottomRightCorner<5,5>();
@@ -1061,7 +1126,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     const MatrixXd dxdparms = -Cinvd.solve(d2chisqdxdparms);
     
     const VectorXd grad = dchisqdparms + dxdparms.transpose()*dchisqdx;
-    const MatrixXd hess = d2chisqdparms2 + 2.*dxdparms.transpose()*d2chisqdxdparms + d2chisqdxdparms.transpose()*d2chisqdx2*d2chisqdxdparms;
+    const MatrixXd hess = d2chisqdparms2 + 2.*dxdparms.transpose()*d2chisqdxdparms + dxdparms.transpose()*d2chisqdx2*dxdparms;
     
     //fill output with corrected state and covariance at reference point
     refParms.fill(0.);
@@ -1093,10 +1158,26 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     
 //     std::cout << "hess debug" << std::endl;
+//     std::cout << "track parms" << std::endl;
+//     std::cout << tkparms << std::endl;
+//     std::cout << "dxRef" << std::endl;
+//     std::cout << dxRef << std::endl;
 //     std::cout << "original cov" << std::endl;
 //     std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
 //     std::cout << "recomputed cov" << std::endl;
 //     std::cout << 2.*Cinner << std::endl;
+//     std::cout << "dxinner/dparms" << std::endl;
+//     std::cout << dxdparms.bottomRows<5>() << std::endl;
+//     std::cout << "grad" << std::endl;
+//     std::cout << grad << std::endl;
+//     std::cout << "hess diagonal" << std::endl;
+//     std::cout << hess.diagonal() << std::endl;
+//     std::cout << "hess0 diagonal" << std::endl;
+//     std::cout << d2chisqdparms2.diagonal() << std::endl;
+//     std::cout << "hess1 diagonal" << std::endl;
+//     std::cout << 2.*(dxdparms.transpose()*d2chisqdxdparms).diagonal() << std::endl;
+//     std::cout << "hess2 diagonal" << std::endl;
+//     std::cout << (dxdparms.transpose()*d2chisqdx2*dxdparms).diagonal() << std::endl;
     
     //fill packed hessian and indices
     const unsigned int nsym = npars*(1+npars)/2;
