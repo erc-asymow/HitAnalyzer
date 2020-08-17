@@ -67,6 +67,7 @@
 #include <unsupported/Eigen/AutoDiff>
 #include<Eigen/StdVector>
 #include <iostream>
+#include <functional>
 
 using namespace Eigen;
 
@@ -111,6 +112,20 @@ typedef MatrixXd ELossJacobianMatrix;
 template<typename T>
 using evector = std::vector<T, Eigen::aligned_allocator<T>>;
 
+
+namespace std{
+  template <>
+  struct hash<std::pair<unsigned int, unsigned int>> {
+      size_t operator() (const std::pair<unsigned int, unsigned int>& s) const {
+        unsigned long long rawkey = s.first;
+        rawkey = rawkey << 32;
+        rawkey += s.second;
+        return std::hash<unsigned long long>()(rawkey); 
+      }
+  };
+}
+
+
 //double active scalar for autodiff grad+hessian
 //template arguments are datatype, and size of gradient
 //In this form the gradients are null length unless/until the variable
@@ -128,7 +143,6 @@ public:
   static void fillDescriptions(edm::ConfigurationDescriptions &descriptions);
 
 private:
-
   
   virtual void beginJob() override;
   virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
@@ -182,6 +196,9 @@ private:
   unsigned int nJacRef;
   unsigned int nSym;
   
+  float gradmax;
+  float hessmax;
+  
   std::array<float, 5> trackOrigParms;
   std::array<float, 25> trackOrigCov;
   
@@ -204,6 +221,10 @@ private:
   unsigned int run;
   unsigned int lumi;
   unsigned long long event;
+  
+  std::vector<double> gradagg;
+  
+  std::unordered_map<std::pair<unsigned int, unsigned int>, double> hessaggsparse;
   
 };
 
@@ -233,7 +254,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 
 //   fout = new TFile("trackTreeGrads.root", "RECREATE");
 //   fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
-  fout = new TFile("trackTreeGradsdebug2.root", "RECREATE");
+  fout = new TFile("trackTreeGrads.root", "RECREATE");
   //TODO this needs a newer root version
 //   fout->SetCompressionAlgorithm(ROOT::kLZ4);
 //   fout->SetCompressionLevel(3);
@@ -270,17 +291,20 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   tree->Branch("nParms", &nParms, basketSize);
   tree->Branch("nJacRef", &nJacRef, basketSize);
   
-  tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
+//   tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
   tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
   tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
   
-  tree->Branch("nSym", &nSym, basketSize);
+//   tree->Branch("nSym", &nSym, basketSize);
   
-  tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+//   tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
   
   tree->Branch("run", &run);
   tree->Branch("lumi", &lumi);
   tree->Branch("event", &event);
+  
+  tree->Branch("gradmax", &gradmax);
+  tree->Branch("hessmax", &hessmax);
 
 }
 
@@ -350,12 +374,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   lumi = iEvent.luminosityBlock();
   event = iEvent.id().event();
   
-  for (unsigned int j=0; j<trajH->size(); ++j) {
-    const Trajectory& traj = (*trajH)[j];
+  for (unsigned int itraj=0; itraj<trajH->size(); ++itraj) {
+    const Trajectory& traj = (*trajH)[itraj];
     
-    const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
+//     const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
 //     const reco::Track& track = *(*trackH)[trajref];
-    const reco::Track& track = (*trackH)[j];
+    const reco::Track& track = (*trackH)[itraj];
 //     const reco::Track& trackOrig = (*trackOrigH)[(*indicesH)[j]];
 
 //     std::cout << "j " << j << " (*indicesH)[j] " << (*indicesH)[j] <<std::endl;
@@ -668,10 +692,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
           gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
 
-          //fill global hessian (upper triangular part only)
-          hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>().triangularView<Upper>();
+          //fill global hessian (upper triangular blocks only)
+          hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
           hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-          hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>().triangularView<Upper>();
+          hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
           
           const unsigned int xglobalidx = detidparms.at(std::make_pair(0,hit->geographicalId()));
           globalidxv[parmidx] = xglobalidx;
@@ -723,10 +747,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
             gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
 
-            //fill global hessian (upper triangular part only)
-            hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>().triangularView<Upper>();
+            //fill global hessian (upper triangular blocks only)
+            hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-            hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>().triangularView<Upper>();
+            hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
             for (unsigned int idim=0; idim<2; ++idim) {
               const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, hit->geographicalId()));
@@ -772,10 +796,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
             gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
 
-            //fill global hessian (upper triangular part only)
-            hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>().triangularView<Upper>();
+            //fill global hessian (upper triangular blocks only)
+            hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-            hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>().triangularView<Upper>();
+            hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
             const unsigned int xglobalidx = detidparms.at(std::make_pair(0,hit->geographicalId()));
             globalidxv[parmidx] = xglobalidx;
@@ -1066,10 +1090,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
         gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
 
-        //fill global hessian (upper triangular part only)
-        hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>().triangularView<Upper>();
+        //fill global hessian (upper triangular blocks only)
+        hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
         hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-        hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>().triangularView<Upper>();
+        hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
         
         const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,hit->geographicalId()));
         globalidxv[parmidx] = bfieldglobalidx;
@@ -1109,10 +1133,6 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //now do the expensive calculations and fill outputs
     auto const& dchisqdx = gradfull.head(nstateparms);
     auto const& dchisqdparms = gradfull.tail(npars);
-
-    //fill in lower triangular part where needed
-    hessfull.topLeftCorner(nstateparms, nstateparms).triangularView<StrictlyLower>() = hessfull.topLeftCorner(nstateparms, nstateparms).triangularView<StrictlyUpper>().transpose();
-    hessfull.bottomRightCorner(npars, npars).triangularView<StrictlyLower>() = hessfull.bottomRightCorner(npars, npars).triangularView<StrictlyUpper>().transpose();
     
     auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
     auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
@@ -1123,10 +1143,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     const Vector5d dxRef = -Fref*Cinvd.solve(dchisqdx).tail<5>();
     const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).bottomRightCorner<5,5>();
     
-    const MatrixXd dxdparms = -Cinvd.solve(d2chisqdxdparms);
+    const MatrixXd dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
     
-    const VectorXd grad = dchisqdparms + dxdparms.transpose()*dchisqdx;
-    const MatrixXd hess = d2chisqdparms2 + 2.*dxdparms.transpose()*d2chisqdxdparms + dxdparms.transpose()*d2chisqdx2*dxdparms;
+    const VectorXd grad = dchisqdparms + dxdparms*dchisqdx;
+    const MatrixXd hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
     
     //fill output with corrected state and covariance at reference point
     refParms.fill(0.);
@@ -1135,26 +1155,65 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     Map<Vector5f>(refParms.data()) = (Map<const Vector5d>(refVec.Array()) + dxRef).cast<float>();
     Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Fref*Cinner*Fref.transpose()).cast<float>().triangularView<Upper>();
     
-    gradv.clear();
+//     gradv.clear();
     jacrefv.clear();
 
-    gradv.resize(npars,0.);
+//     gradv.resize(npars,0.);
     jacrefv.resize(5*npars, 0.);
     
     nJacRef = 5*npars;
-    tree->SetBranchAddress("gradv", gradv.data());
+//     tree->SetBranchAddress("gradv", gradv.data());
     tree->SetBranchAddress("jacrefv", jacrefv.data());
     
     //eigen representation of the underlying vector storage
-    Map<VectorXf> gradout(gradv.data(), npars);
+//     Map<VectorXf> gradout(gradv.data(), npars);
     Map<Matrix<float, 5, Dynamic, RowMajor> > jacrefout(jacrefv.data(), 5, npars);
     
-    jacrefout = (Fref*dxdparms.bottomRows<5>()).cast<float>();
+    jacrefout = (Fref*dxdparms.rightCols<5>().transpose()).cast<float>();
     
-    gradout = grad.cast<float>();
+//     gradout = grad.cast<float>();
     
-    Matrix<double, 5, Dynamic> jacref = Matrix<double, 5, Dynamic>::Zero(5, npars);
     
+    float refPt = std::abs(1./refParms[0])*std::sin(M_PI_2 - refParms[1]);
+
+    gradmax = 0.;
+    for (unsigned int i=0; i<npars; ++i) {
+      const float absval = std::abs(grad[i]);
+      if (absval>gradmax) {
+        gradmax = absval;
+      }      
+    }
+    
+    
+    if (gradmax < 1e5 && refPt > 5.5) {
+      //fill aggregrate gradient and hessian
+      for (unsigned int i=0; i<npars; ++i) {
+        gradagg[globalidxv[i]] += grad[i];
+      }
+      
+      hessmax = 0.;
+      for (unsigned int i=0; i<npars; ++i) {
+        for (unsigned int j=i; j<npars; ++j) {
+          const unsigned int iidx = globalidxv[i];
+          const unsigned int jidx = globalidxv[j];
+          
+          const float absval = std::abs(hess(i,j));
+          if (absval>hessmax) {
+            hessmax = absval;
+          }
+          
+          const std::pair<unsigned int, unsigned int> key = std::make_pair(std::min(iidx,jidx), std::max(iidx,jidx));
+          
+          auto it = hessaggsparse.find(key);
+          if (it==hessaggsparse.end()) {
+            hessaggsparse[key] = hess(i,j);
+          }
+          else {
+            it->second += hess(i,j);
+          }
+        }
+      }
+    }
     
     
 //     std::cout << "hess debug" << std::endl;
@@ -1180,22 +1239,22 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     std::cout << (dxdparms.transpose()*d2chisqdx2*dxdparms).diagonal() << std::endl;
     
     //fill packed hessian and indices
-    const unsigned int nsym = npars*(1+npars)/2;
-    hesspackedv.clear();    
-    hesspackedv.resize(nsym, 0.);
-    
-    nSym =nsym;
-    tree->SetBranchAddress("hesspackedv", hesspackedv.data());
-    
-    Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
-    const Map<const VectorXu> globalidx(globalidxv.data(), npars);
-
-    unsigned int packedidx = 0;
-    for (unsigned int ipar = 0; ipar < npars; ++ipar) {
-      const unsigned int segmentsize = npars - ipar;
-      hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
-      packedidx += segmentsize;
-    }
+//     const unsigned int nsym = npars*(1+npars)/2;
+//     hesspackedv.clear();    
+//     hesspackedv.resize(nsym, 0.);
+//     
+//     nSym = nsym;
+//     tree->SetBranchAddress("hesspackedv", hesspackedv.data());
+//     
+//     Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
+//     const Map<const VectorXu> globalidx(globalidxv.data(), npars);
+// 
+//     unsigned int packedidx = 0;
+//     for (unsigned int ipar = 0; ipar < npars; ++ipar) {
+//       const unsigned int segmentsize = npars - ipar;
+//       hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
+//       packedidx += segmentsize;
+//     }
 
     tree->Fill();
   }
@@ -1210,6 +1269,30 @@ void ResidualGlobalCorrectionMaker::beginJob()
 void ResidualGlobalCorrectionMaker::endJob()
 {
   fout->cd();
+  
+  TTree *gradtree = new TTree("gradtree","");
+  double gradval;
+  gradtree->Branch("gradval",&gradval);
+  for (unsigned int i=0; i<gradagg.size(); ++i) {
+    gradval = gradagg[i];
+    gradtree->Fill();
+  }
+  
+  TTree *hesstree = new TTree("hesstree","");
+  unsigned int iidx;
+  unsigned int jidx;
+  double hessval;
+  hesstree->Branch("iidx",&iidx);
+  hesstree->Branch("jidx",&jidx);
+  hesstree->Branch("hessval",&hessval);
+  
+  for (auto const& item : hessaggsparse) {
+    iidx = item.first.first;
+    jidx = item.first.second;
+    hessval = item.second;
+    hesstree->Fill();
+  }
+  
   fout->Write();
   fout->Close();
 }
@@ -1348,8 +1431,14 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
   runfout->Write();
   runfout->Close();
   
+  unsigned int nglobal = detidparms.size();
 //   std::sort(detidparms.begin(), detidparms.end());
   std::cout << "nglobalparms = " << detidparms.size() << std::endl;
+  
+  //initialize gradient
+  if (!gradagg.size()) {
+    gradagg.resize(nglobal, 0.);
+  }
     
   
 }
