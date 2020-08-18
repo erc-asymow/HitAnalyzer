@@ -20,10 +20,11 @@
 #include "Geometry/Records/interface/GlobalTrackingGeometryRecord.h"
 #include "DataFormats/SiPixelDetId/interface/PXFDetId.h"
 #include "DataFormats/SiPixelDetId/interface/PXBDetId.h"
-#include "DataFormats/SiStripDetId/interface/TIDDetId.h"
-#include "DataFormats/SiStripDetId/interface/TIBDetId.h"
-#include "DataFormats/SiStripDetId/interface/TOBDetId.h"
-#include "DataFormats/SiStripDetId/interface/TECDetId.h"
+#include "DataFormats/TrackerCommon/interface/TrackerTopology.h"
+// #include "DataFormats/SiStripDetId/interface/TIDDetId.h"
+// #include "DataFormats/SiStripDetId/interface/TIBDetId.h"
+// #include "DataFormats/SiStripDetId/interface/TOBDetId.h"
+// #include "DataFormats/SiStripDetId/interface/TECDetId.h"
 #include "DataFormats/GeometryCommonDetAlgo/interface/MeasurementPoint.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticle.h"
 #include "Geometry/CommonTopologies/interface/StripTopology.h"
@@ -333,7 +334,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
-
+  
   ESHandle<MagneticField> magfield;
   iSetup.get<IdealMagneticFieldRecord>().get(magfield);
   auto field = magfield.product();
@@ -1225,6 +1226,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     std::cout << tms[nhits-1].updatedState().curvilinearError().matrix() << std::endl;
 //     std::cout << "recomputed cov" << std::endl;
 //     std::cout << 2.*Cinner << std::endl;
+
 //     std::cout << "dxinner/dparms" << std::endl;
 //     std::cout << dxdparms.bottomRows<5>() << std::endl;
 //     std::cout << "grad" << std::endl;
@@ -1305,6 +1307,9 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
   
+  edm::ESHandle<TrackerTopology> trackerTopology;
+  es.get<TrackerTopologyRcd>().get(trackerTopology);
+  
   detidparms.clear();
   
   std::set<std::pair<int, DetId> > parmset;
@@ -1377,24 +1382,30 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
     }
     else if (det->subDetector() == GeomDetEnumerators::TIB)
     {
-      TIBDetId detid(det->geographicalId());
-      layer = detid.layer();
+//       TIBDetId detid(det->geographicalId());
+//       layer = detid.layer();
+      layer = trackerTopology->tibLayer(det->geographicalId());
     }
     else if (det->subDetector() == GeomDetEnumerators::TOB)
     {
-      TOBDetId detid(det->geographicalId());
-      layer = detid.layer();
+//       TOBDetId detid(det->geographicalId());
+//       layer = detid.layer();
+      layer = trackerTopology->tobLayer(det->geographicalId());
     }
     else if (det->subDetector() == GeomDetEnumerators::TID)
     {
-      TIDDetId detid(det->geographicalId());
-      layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+      unsigned int side = trackerTopology->tidSide(detid);
+      unsigned int wheel = trackerTopology->tidWheel(detid);
+      layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
 
     }
     else if (det->subDetector() == GeomDetEnumerators::TEC)
     {
-      TECDetId detid(det->geographicalId());
-      layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+//       TECDetId detid(det->geographicalId());
+//       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+      unsigned int side = trackerTopology->tecSide(detid);
+      unsigned int wheel = trackerTopology->tecWheel(detid);
+      layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
     }
     
 //     ParmInfo parminfo;
