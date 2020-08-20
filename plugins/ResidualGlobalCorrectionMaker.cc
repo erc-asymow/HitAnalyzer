@@ -34,6 +34,7 @@
 #include "TrackingTools/AnalyticalJacobians/interface/AnalyticalCurvilinearJacobian.h"
 #include "TrackingTools/AnalyticalJacobians/interface/JacobianLocalToCurvilinear.h"
 #include "TrackingTools/AnalyticalJacobians/interface/JacobianCurvilinearToLocal.h"
+#include "TrackingTools/AnalyticalJacobians/interface/JacobianCurvilinearToCartesian.h"
 #include "TrackingTools/AnalyticalJacobians/interface/JacobianCartesianToCurvilinear.h"
 #include "DataFormats/GeometryCommonDetAlgo/interface/ErrorFrameTransformer.h"
 #include "TrackingTools/GeomPropagators/interface/AnalyticalPropagator.h"
@@ -162,6 +163,8 @@ private:
                                                              
   Matrix<double, 5, 6> materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
   
+  std::array<Matrix<double, 5, 5>, 5> processNoiseJacobians(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const;
+  
   template <unsigned int D>
   AlgebraicVector5 lupdate(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit);
 
@@ -211,8 +214,15 @@ private:
   std::array<float, 5> trackOrigParms;
   std::array<float, 25> trackOrigCov;
   
+  
   std::array<float, 5> trackParms;
   std::array<float, 25> trackCov;
+  
+  std::array<float, 5> refParms_iter0;
+  std::array<float, 25> refCov_iter0;
+
+  std::array<float, 5> refParms_iter2;
+  std::array<float, 25> refCov_iter2;
   
   std::array<float, 5> refParms;
   std::array<float, 25> refCov;
@@ -283,6 +293,12 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 //   tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
   tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
   tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
+  
+  tree->Branch("refParms_iter0", refParms_iter0.data(), "refParms_iter0[5]/F", basketSize);
+  tree->Branch("refCov_iter0", refCov_iter0.data(), "refCov_iter0[25]/F", basketSize);
+//   tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
+//   tree->Branch("refCov_iter2", refCov_iter2.data(), "refCov_iter2[25]/F", basketSize);  
+  
   tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
   tree->Branch("refCov", refCov.data(), "refCov[25]/F", basketSize);
   tree->Branch("genParms", genParms.data(), "genParms[5]/F", basketSize);
@@ -595,8 +611,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     }
     
     
-    VectorXd gradfull = VectorXd::Zero(nparmsfull);
-    MatrixXd hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
+    VectorXd gradfull;
+    MatrixXd hessfull;
+    
     
 //     VectorXd gradfull = chisq.value().derivatives();
 //     MatrixXd hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
@@ -614,8 +631,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     TrajectoryStateOnSurface currtsos;
     
     
-    unsigned int parmidx = 0;
-
+//     std::cout << "initial reference point parameters:" << std::endl;
+//     std::cout << track.parameters() << std::endl;
+    
+    VectorXd dxfull;
+    MatrixXd dxdparms;
+    VectorXd grad;
+    MatrixXd hess;
+    LDLT<MatrixXd> Cinvd;
     
     auto const& refpoint = track.referencePoint();
     auto const& trackmom = track.momentum();
@@ -625,23 +648,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     const GlobalTrajectoryParameters refglobal(refpos, refmom, track.charge(), field);
     const CurvilinearTrajectoryError referr(track.covariance());
     
-    //initialize state
-//     FreeTrajectoryState currentFts(refpos, refmom, track.charge(), field);
+    //initialize states
+    FreeTrajectoryState refFts(refpos, refmom, track.charge(), field);
+    std::vector<TrajectoryStateOnSurface> layerStates;
+    layerStates.reserve(nhits);
+    
+//     std::cout << "initial reffts:" << std::endl;
+//     std::cout << refFts.parameters().vector() << std::endl;
+    
     FreeTrajectoryState currentFts(refglobal, referr);
     //inflate errors
     currentFts.rescaleError(100.);
-    
-    //propagate track from reference point to first measurement to compute the pathlength, and then compute
-    //the transport jacobian corresponding to the reverse propagation
-    
-//     auto const& propresult = fPropagator.geometricalPropagator().propagateWithPath(refFts, innertsos.surface());
-//     if (!propresult.first.isValid()) {
-//       std::cout << "Abort: propagation from reference point failed" << std::endl;
-//       continue;
-//     }
-//     AnalyticalCurvilinearJacobian curvjac(propresult.first.globalParameters(), refFts.position(), refFts.momentum(), -propresult.second);
-//     const AlgebraicMatrix55& jacF = curvjac.jacobian();
-//     Map<const Matrix<double, 5, 5, RowMajor> > Fref(jacF.Array());
     
     
     bool valid = true;
@@ -649,203 +666,281 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     unsigned int alignmentidx = 0;
 //     unsigned int bfieldidx = 0;
 //     unsigned int elossidx = 0;
+
+    for (unsigned int iiter=0; iiter<4; ++iiter) {
+//       std::cout<< "iter " << iiter << std::endl;
+      
+      gradfull = VectorXd::Zero(nparmsfull);
+      hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
+      unsigned int parmidx = 0;
+
+      if (iiter > 0) {
+        //update current state from reference point state (errors not needed beyond first iteration)
+        JacobianCurvilinearToCartesian curv2cart(refFts.parameters());
+        const AlgebraicMatrix65& jac = curv2cart.jacobian();
+        const AlgebraicVector6 glob = refFts.parameters().vector();
+        
+        auto const& dxlocal = dxfull.head<5>();
+        const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array())*dxlocal;
+        
+        const GlobalPoint pos(globupd[0], globupd[1], globupd[2]);
+        const GlobalVector mom(globupd[3], globupd[4], globupd[5]);
+        double charge = std::copysign(1., refFts.charge()/refFts.momentum().mag() + dxlocal[0]);
+//         std::cout << "before update: reffts:" << std::endl;
+//         std::cout << refFts.parameters().vector() << std::endl;
+//         std::cout << "charge " << refFts.charge() << std::endl;
+        refFts = FreeTrajectoryState(pos, mom, charge, field);
+//         std::cout << "after update: reffts:" << std::endl;
+//         std::cout << refFts.parameters().vector() << std::endl;
+//         std::cout << "charge " << refFts.charge() << std::endl;
+        currentFts = refFts;
+      }
     
-    for (unsigned int ihit = 0; ihit < track.recHitsSize(); ++ihit) {
-      
-      auto const& inhit = *(hitsbegin + ihit);
-      //TODO check for null geographicalId?
-      const GeomDet *detectorG = globalGeometry->idToDet(inhit->geographicalId());
-      auto const& hit = inhit->cloneForFit(*detectorG);
-//       const TransientTrackingRecHit hit = *inhit->cloneForFit(*detectorG);
-      
+      for (unsigned int ihit = 0; ihit < track.recHitsSize(); ++ihit) {
+//         std::cout << "ihit " << ihit << std::endl;
+        
+        auto const& inhit = *(hitsbegin + ihit);
+        //TODO check for null geographicalId?
+        const GeomDet *detectorG = globalGeometry->idToDet(inhit->geographicalId());
+        auto const& hit = inhit->cloneForFit(*detectorG);
+  //       const TransientTrackingRecHit hit = *inhit->cloneForFit(*detectorG);
+        
 
-      auto propresult = fPropagator->geometricalPropagator().propagateWithPath(currentFts, detectorG->surface());
-      TrajectoryStateOnSurface& updtsos = propresult.first;
-      double s = propresult.second;
-      
-      if (!updtsos.isValid()) {
-        std::cout << "Abort: Propagation Failed!" << std::endl;
-        valid = false;
-        break;
-      }
-      
-      //jacobian for propagated state (before material effects)
-      JacobianCurvilinearToLocal hprop(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
-      const AlgebraicMatrix55 &jachprop = hprop.jacobian();
-      //efficient assignment from SMatrix using Eigen::Map
-      Map<const Matrix<double, 5, 5, RowMajor> > jachpropeig(jachprop.Array());
-      MSJacobian Hprop = jachpropeig.cast<MSScalar>();
-      
-      //compute transport jacobian
-      AnalyticalCurvilinearJacobian curvjac(currentFts.parameters(), updtsos.globalParameters().position(), updtsos.globalParameters().momentum(), s);
-      const AlgebraicMatrix55 &jacF = curvjac.jacobian();
-      MSJacobian F = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).cast<MSScalar>();
-      
-      //bfield jacobian
-      const MSVector dF = bfieldJacobian(currentFts.parameters(), updtsos.globalParameters(), s).cast<MSScalar>();
-      
-      //energy loss jacobian
-      const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
-      const MSJacobian E = EdE.leftCols<5>().cast<MSScalar>();
-      const MSVector dE = EdE.rightCols<1>().cast<MSScalar>();
-      
-      //TODO update code to allow doing this in one step with nominal update
-      //temporary tsos to extract process noise without loss of precision
-      TrajectoryStateOnSurface tmptsos(updtsos);
-      tmptsos.update(tmptsos.localParameters(),
-                      LocalTrajectoryError(0.,0.,0.,0.,0.),
-                      tmptsos.surface(),
-                      tmptsos.magneticField(),
-                      tmptsos.surfaceSide());
-      
-      //apply the state update from the material effects
-      bool ok = fPropagator->materialEffectsUpdator().updateStateInPlace(tmptsos, alongMomentum);
-      if (!ok) {
-        std::cout << "Abort: material update failed" << std::endl;
-        valid = false;
-        break;
-      }
-      
-      ok = fPropagator->materialEffectsUpdator().updateStateInPlace(updtsos, alongMomentum);
-      if (!ok) {
-        std::cout << "Abort: material update failed" << std::endl;
-        valid = false;
-        break;
-      }
-      
-      //get the process noise matrix
-      AlgebraicMatrix55 const Qmat = tmptsos.localError().matrix();
-      Map<const Matrix<double, 5, 5, RowMajor> >iQ(Qmat.Array());
-      MSCovariance Qinv = MSCovariance::Zero();
-      //Q is 3x3 in the upper left block because there is no displacement on thin scattering layers
-      //so invert the upper 3x3 block
-      Qinv.topLeftCorner<3,3>() = iQ.topLeftCorner<3,3>().inverse().cast<MSScalar>();
-      
-      //zero displacement on thin scattering layer approximated with small uncertainty
-      const double epsxy = 1e-5; //0.1um
-      Qinv(3,3) = MSScalar(2./epsxy/epsxy);
-      Qinv(4,4) = MSScalar(2./epsxy/epsxy);
-      
-      //apply measurement update if applicable
-      auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
-      if (hit->isValid() && !preciseHit->isValid()) {
-        std::cout << "Abort: Failed updating hit" << std::endl;
-        valid = false;
-        break;
-      }
-      //momentum kink residual
-      //TODO rework code so this can be computed together with the update without loss of precision
-      const AlgebraicVector5 idx0 = hit->isValid() ? update(updtsos, *preciseHit) : AlgebraicVector5(0., 0., 0., 0., 0.);
-      updtsos = hit->isValid() ? updator.update(updtsos, *preciseHit) : updtsos;
-      currentFts = *updtsos.freeState();
-      
-      MSVector dx0 = Map<const Vector5d>(idx0.Array()).cast<MSScalar>();
-      
-      //jacobian for updated state
-      JacobianCurvilinearToLocal h(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
-      const AlgebraicMatrix55 &jach = h.jacobian();
-      //efficient assignment from SMatrix using Eigen::Map
-      Map<const Matrix<double, 5, 5, RowMajor> > jacheig(jach.Array());
-//       Hh.block<2,5>(2*i, 5*i) = jacheig.bottomRows<2>();
-//       StateJacobian H = jacheig.cast<AAdouble>();
-      
-      if (true) {
-        constexpr unsigned int nlocalstate = 10;
-        constexpr unsigned int nlocalbfield = 1;
-        constexpr unsigned int nlocaleloss = 1;
-        constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
+        auto propresult = fPropagator->geometricalPropagator().propagateWithPath(currentFts, detectorG->surface());
+        TrajectoryStateOnSurface& updtsos = propresult.first;
+        double s = propresult.second;
         
-        constexpr unsigned int nlocal = nlocalstate + nlocalbfield + nlocaleloss;
-        
-        constexpr unsigned int localstateidx = 0;
-        constexpr unsigned int localbfieldidx = localstateidx + nlocalstate;
-        constexpr unsigned int localelossidx = localbfieldidx + nlocalbfield;
-        constexpr unsigned int localparmidx = localbfieldidx;
-        
-        const unsigned int fullstateidx = 5*ihit;
-        const unsigned int fullparmidx = nstateparms + parmidx;
-        
-        MSVector dxprev = MSVector::Zero();
-        for (unsigned int j=0; j<dxprev.size(); ++j) {
-          init_twice_active_var(dxprev[j], nlocal, localstateidx + j);
-        }
-
-        MSVector dx = MSVector::Zero();
-        for (unsigned int j=0; j<dx.size(); ++j) {
-          init_twice_active_var(dx[j], nlocal, localstateidx + 5 + j);
+        if (!updtsos.isValid()) {
+          std::cout << "Abort: Propagation Failed!" << std::endl;
+          valid = false;
+          break;
         }
         
-        const MSJacobian H = jacheig.cast<MSScalar>();
+        //jacobian for propagated state (before material effects)
+        JacobianCurvilinearToLocal hprop(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
+        const AlgebraicMatrix55 &jachprop = hprop.jacobian();
+        //efficient assignment from SMatrix using Eigen::Map
+        Map<const Matrix<double, 5, 5, RowMajor> > jachpropeig(jachprop.Array());
+        MSJacobian Hprop = jachpropeig.cast<MSScalar>();
         
-        MSScalar dbeta(0.);
-        init_twice_active_var(dbeta, nlocal, localbfieldidx);
+        //compute transport jacobian
+        AnalyticalCurvilinearJacobian curvjac(currentFts.parameters(), updtsos.globalParameters().position(), updtsos.globalParameters().momentum(), s);
+        const AlgebraicMatrix55 &jacF = curvjac.jacobian();
+        MSJacobian F = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).cast<MSScalar>();
         
-        MSScalar dxi(0.);
-        init_twice_active_var(dxi, nlocal, localelossidx);
+        //bfield jacobian
+        const MSVector dF = bfieldJacobian(currentFts.parameters(), updtsos.globalParameters(), s).cast<MSScalar>();
         
-        MSVector dms = dx0 + H*dx - E*Hprop*F*dxprev - E*Hprop*dF*dbeta - dE*dxi;
-        MSScalar chisq = dms.transpose()*Qinv*dms;
+        //energy loss jacobian
+        const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
+        const MSJacobian E = EdE.leftCols<5>().cast<MSScalar>();
+        const MSVector dE = EdE.rightCols<1>().cast<MSScalar>();
         
-        auto const& gradlocal = chisq.value().derivatives();
-        //fill local hessian
-        Matrix<double, nlocal, nlocal> hesslocal;
-        for (unsigned int j=0; j<nlocal; ++j) {
-          hesslocal.row(j) = chisq.derivatives()[j].derivatives();
+        //process noise jacobians
+//         const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
+        
+        //TODO update code to allow doing this in one step with nominal update
+        //temporary tsos to extract process noise without loss of precision
+        TrajectoryStateOnSurface tmptsos(updtsos);
+        tmptsos.update(tmptsos.localParameters(),
+                        LocalTrajectoryError(0.,0.,0.,0.,0.),
+                        tmptsos.surface(),
+                        tmptsos.magneticField(),
+                        tmptsos.surfaceSide());
+        
+        //apply the state update from the material effects
+        bool ok = fPropagator->materialEffectsUpdator().updateStateInPlace(tmptsos, alongMomentum);
+        if (!ok) {
+          std::cout << "Abort: material update failed" << std::endl;
+          valid = false;
+          break;
         }
         
-        //fill global gradient
-        gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
-        gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+        ok = fPropagator->materialEffectsUpdator().updateStateInPlace(updtsos, alongMomentum);
+        if (!ok) {
+          std::cout << "Abort: material update failed" << std::endl;
+          valid = false;
+          break;
+        }
+        
+        //get the process noise matrix
+        AlgebraicMatrix55 const Qmat = tmptsos.localError().matrix();
+        Map<const Matrix<double, 5, 5, RowMajor> >iQ(Qmat.Array());
+  //       std::cout<< "Q" << std::endl;
+  //       std::cout<< iQ << std::endl;
+        MSCovariance Qinv = MSCovariance::Zero();
+        //Q is 3x3 in the upper left block because there is no displacement on thin scattering layers
+        //so invert the upper 3x3 block
+        Qinv.topLeftCorner<3,3>() = iQ.topLeftCorner<3,3>().inverse().cast<MSScalar>();
+        
+        //zero displacement on thin scattering layer approximated with small uncertainty
+        const double epsxy = 1e-5; //0.1um
+        Qinv(3,3) = MSScalar(1./epsxy/epsxy);
+        Qinv(4,4) = MSScalar(1./epsxy/epsxy);
+        
+        //apply measurement update if applicable
+        auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
+        if (hit->isValid() && !preciseHit->isValid()) {
+          std::cout << "Abort: Failed updating hit" << std::endl;
+          valid = false;
+          break;
+        }
+        //momentum kink residual
+        //TODO rework code so this can be computed together with the update without loss of precision
+  //       const AlgebraicVector5 idx0 = hit->isValid() ? update(updtsos, *preciseHit) : AlgebraicVector5(0., 0., 0., 0., 0.);
+  //       updtsos = hit->isValid() ? updator.update(updtsos, *preciseHit) : updtsos;
 
-        //fill global hessian (upper triangular blocks only)
-        hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-        hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-        hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
-        
-        const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,hit->geographicalId()));
-        globalidxv[parmidx] = bfieldglobalidx;
-        parmidx++;
-        
-        const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
-        globalidxv[parmidx] = elossglobalidx;
-        parmidx++;
-      }
-      
-      //hit information
-      //FIXME consolidate this special cases into templated function(s)
-      if (preciseHit->isValid()) {
-        constexpr unsigned int nlocalstate = 2;
-        constexpr unsigned int localstateidx = 0;
-        constexpr unsigned int localalignmentidx = nlocalstate;
-        constexpr unsigned int localparmidx = localalignmentidx;
-        
-        const unsigned int fullstateidx = 5*(ihit+1) + 3;
-        const unsigned int fullparmidx = nstateparms+parmidx;
-
-        if (preciseHit->dimension()==1) {
-          constexpr unsigned int nlocalalignment = 1;
-          constexpr unsigned int nlocalparms = nlocalalignment;
-          constexpr unsigned int nlocal = nlocalstate + nlocalparms;
+        AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
+        if (iiter==0) {
+          //current state from predicted state
+          if (hit->isValid()) {
+            idx0 = update(updtsos, *preciseHit);
+            updtsos = updator.update(updtsos, *preciseHit);
+            if (!updtsos.isValid()) {
+              std::cout << "Kalman filter update failed" << std::endl;
+              valid = false;
+              break;
+            }
+          }
+          layerStates.push_back(updtsos);
+        }
+        else {
+          //current state from previous state on this layer
+          //save current parameters          
+          TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
+          JacobianCurvilinearToLocal curv2local(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
+          const AlgebraicMatrix55& jac = curv2local.jacobian();
+          const AlgebraicVector5 local = oldtsos.localParameters().vector();
+          auto const& dxlocal = dxfull.segment<5>(5*(ihit+1));
+          const Matrix<double, 5, 1> localupd = Map<const Matrix<double, 5, 1>>(local.Array()) + Map<const Matrix<double, 5, 5, RowMajor>>(jac.Array())*dxlocal;
+          AlgebraicVector5 localvecupd(localupd[0],localupd[1],localupd[2],localupd[3],localupd[4]);
           
-          const StripHitScalar dy0(preciseHit->localPosition().x() - updtsos.localPosition().x());
-          const StripHitScalar Vinv(1./preciseHit->localPositionError().xx());
+          idx0 = localvecupd - updtsos.localParameters().vector();
           
-          StripHitVector dx = StripHitVector::Zero();
+          const LocalTrajectoryParameters localparms(localvecupd, oldtsos.localParameters().pzSign());
+          
+//           std::cout << "before update: oldtsos:" << std::endl;
+//           std::cout << oldtsos.localParameters().vector() << std::endl;
+          oldtsos.update(localparms, oldtsos.surface(), field, oldtsos.surfaceSide());
+//           std::cout << "after update: oldtsos:" << std::endl;
+//           std::cout << oldtsos.localParameters().vector() << std::endl;
+          updtsos = oldtsos;
+        }
+        
+        currentFts = *updtsos.freeState();
+        
+        MSVector dx0 = Map<const Vector5d>(idx0.Array()).cast<MSScalar>();
+        
+        //jacobian for updated state
+        JacobianCurvilinearToLocal h(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
+        const AlgebraicMatrix55 &jach = h.jacobian();
+        //efficient assignment from SMatrix using Eigen::Map
+        Map<const Matrix<double, 5, 5, RowMajor> > jacheig(jach.Array());
+  //       Hh.block<2,5>(2*i, 5*i) = jacheig.bottomRows<2>();
+  //       StateJacobian H = jacheig.cast<AAdouble>();
+        
+        if (true) {
+          constexpr unsigned int nlocalstate = 10;
+          constexpr unsigned int nlocalbfield = 1;
+          constexpr unsigned int nlocaleloss = 1;
+          constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
+          
+          constexpr unsigned int nlocal = nlocalstate + nlocalbfield + nlocaleloss;
+          
+          constexpr unsigned int localstateidx = 0;
+          constexpr unsigned int localbfieldidx = localstateidx + nlocalstate;
+          constexpr unsigned int localelossidx = localbfieldidx + nlocalbfield;
+          constexpr unsigned int localparmidx = localbfieldidx;
+          
+          const unsigned int fullstateidx = 5*ihit;
+          const unsigned int fullparmidx = nstateparms + parmidx;
+          
+          MSVector dxprev = MSVector::Zero();
+          for (unsigned int j=0; j<dxprev.size(); ++j) {
+            init_twice_active_var(dxprev[j], nlocal, localstateidx + j);
+          }
+
+          MSVector dx = MSVector::Zero();
           for (unsigned int j=0; j<dx.size(); ++j) {
-            init_twice_active_var(dx[j], nlocal, localstateidx + j);
+            init_twice_active_var(dx[j], nlocal, localstateidx + 5 + j);
           }
           
-          //single alignment parameter
-          StripHitScalar dalpha(0.);
-          init_twice_active_var(dalpha, nlocal, localalignmentidx);
+          const MSJacobian H = jacheig.cast<MSScalar>();
+          
+          MSScalar dbeta(0.);
+          init_twice_active_var(dbeta, nlocal, localbfieldidx);
+          
+          MSScalar dxi(0.);
+          init_twice_active_var(dxi, nlocal, localelossidx);
+          
+          const MSVector dms = dx0 + H*dx - E*Hprop*F*dxprev - E*Hprop*dF*dbeta - dE*dxi;
+          const MSScalar chisq = dms.transpose()*Qinv*dms;
+          
+//           MSScalar chisq;
+//           
+//           if (iiter<3) {
+//             //standard fit
+//             const MSVector dms = dx0 + H*dx - E*Hprop*F*dxprev - E*Hprop*dF*dbeta - dE*dxi;
+//             chisq = dms.transpose()*Qinv*dms;            
+//           }
+//           else {
+//             //maximum likelihood fit
+//             const MSVector dxprop = Hprop*F*dxprev;
+//             const MSCovariance dQdxprop0 = dQs[0].cast<MSScalar>();
+//             const MSCovariance dQdxprop1 = dQs[1].cast<MSScalar>();
+//             const MSCovariance dQdxprop2 = dQs[2].cast<MSScalar>();
+//             const MSCovariance dQdxi = dQs[3].cast<MSScalar>();
+//             
+//             const MSCovariance dQ = dxprop[0]*dQdxprop0 + dxprop[1]*dQdxprop1 + dxprop[2]*dQdxprop2 + dxi*dQdxi;
+//             
+//             const Matrix<MSScalar, 3, 3> Qms = iQ.topLeftCorner<3,3>().cast<MSScalar>() + dQ.topLeftCorner<3,3>();
+//             Qinv.topLeftCorner<3,3>() = Qms.inverse();
+//             const MSScalar logdetQ = Eigen::log(Qms.determinant());
+// 
+//             const MSVector dms = dx0 + H*dx - E*dxprop - E*Hprop*dF*dbeta - dE*dxi;
+//             chisq = dms.transpose()*Qinv*dms;
+//             chisq = chisq + logdetQ;            
+//             
+//           }
+          
+  //         MSCovariance Q = iQ.cast<MSScalar>();
+          
+  //         const MSVector dxprop = Hprop*F*dxprev;
+  //         const MSCovariance dQdxprop0 = dQs[0].cast<MSScalar>();
+  //         const MSCovariance dQdxprop1 = dQs[1].cast<MSScalar>();
+  //         const MSCovariance dQdxprop2 = dQs[2].cast<MSScalar>();
+  //         const MSCovariance dQdxi = dQs[3].cast<MSScalar>();
+  // //         
+  //         const MSCovariance dQ = dxprop[0]*dQdxprop0 + dxprop[1]*dQdxprop1 + dxprop[2]*dQdxprop2 + dxi*dQdxi;
+    
+  //         const MSVector dxprop = Hprop*F*dxprev;
+  //         const MSCovariance dQdxprop0 = dQs[0].cast<MSScalar>();
+  //         const MSCovariance d2Qdxprop02 = dQs[1].cast<MSScalar>();
+  //         
+  //         const MSCovariance dQ = dxprop[0]*dQdxprop0 + 0.5*dxprop[0]*dxprop[0]*d2Qdxprop02;
+          
+  //         MSCovariance Qinv = MSCovariance::Zero();
+  //         Qinv(3,3) = MSScalar(1./epsxy/epsxy);
+  //         Qinv(4,4) = MSScalar(1./epsxy/epsxy);
+  //         Qinv.block<2,2>(1,1) = iQ.block<2,2>(1,1).inverse().cast<MSScalar>();
+  //         const MSScalar Qelos = MSScalar(iQ(0,0)) + dQ(0,0);
+  //         Qinv(0,0) = 1./Qelos;
+  // //         const Matrix<MSScalar, 3, 3> Qms = iQ.topLeftCorner<3,3>().cast<MSScalar>() + dQ.topLeftCorner<3,3>();
+  // //         Qinv.topLeftCorner<3,3>() = Qms.inverse();
+  // //         const MSScalar logdetQ = Eigen::log(Qms.determinant());
+  //         const MSScalar logdetQ = Eigen::log(Qelos);
+  // //         
+  //         const MSVector dms = dx0 + H*dx - E*dxprop - E*Hprop*dF*dbeta - dE*dxi;
+  //         MSScalar chisq = dms.transpose()*Qinv*dms;
+  //         chisq = chisq + logdetQ;
+          
+  //         const MSCovariance Qinvmod = Qinv - Qinv*dQ*Qinv;
+  //         const MSScalar dlogdetQ = Eigen::log(1. + (Qinv*dQ).trace());
+  //         
+  //         const MSVector dms = dx0 + H*dx - E*dxprop - E*Hprop*dF*dbeta - dE*dxi;
+  //         MSScalar chisq = dms.transpose()*Qinvmod*dms;
+  //         chisq = chisq + dlogdetQ;
 
-          
-          const StripHitScalar A(1.);
-          
-          const StripHit1DJacobian H = jacheig.block<1,2>(3,3).cast<StripHitScalar>();
-          
-          StripHitScalar dh = dy0 - (H*dx)[0] - A*dalpha;
-          StripHitScalar chisq = dh*dh*Vinv;
           
           auto const& gradlocal = chisq.value().derivatives();
           //fill local hessian
@@ -863,94 +958,51 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
           hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
           
-          const unsigned int xglobalidx = detidparms.at(std::make_pair(0,preciseHit->geographicalId()));
-          globalidxv[parmidx] = xglobalidx;
+          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,hit->geographicalId()));
+          globalidxv[parmidx] = bfieldglobalidx;
+          parmidx++;
+          
+          const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
+          globalidxv[parmidx] = elossglobalidx;
           parmidx++;
         }
-        else if (preciseHit->dimension()==2) {
-          bool ispixel = GeomDetEnumerators::isTrackerPixel(detectorG->subDetector());
-
-          Matrix2d iV;
-          iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
-                preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
+        
+        //hit information
+        //FIXME consolidate this special cases into templated function(s)
+        if (preciseHit->isValid()) {
+          constexpr unsigned int nlocalstate = 2;
+          constexpr unsigned int localstateidx = 0;
+          constexpr unsigned int localalignmentidx = nlocalstate;
+          constexpr unsigned int localparmidx = localalignmentidx;
           
-          if (ispixel) {
-            constexpr unsigned int nlocalalignment = 2;
-            constexpr unsigned int nlocalparms = nlocalalignment;
-            constexpr unsigned int nlocal = nlocalstate + nlocalparms;
-            
-            PixelHit2DVector dy0;
-            dy0[0] = PixelHit2DScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
-            dy0[1] = PixelHit2DScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
-            
-            const PixelHit2DCovariance Vinv = iV.inverse().cast<PixelHit2DScalar>();
-            
-            PixelHit2DVector dx = PixelHit2DVector::Zero();
-            for (unsigned int j=0; j<dx.size(); ++j) {
-              init_twice_active_var(dx[j], nlocal, localstateidx + j);
-            }
-            
-            //two alignment parameters
-            PixelHit2DVector dalpha = PixelHit2DVector::Zero();
-            for (unsigned int idim=0; idim<2; ++idim) {
-              init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
-            }
-            const Matrix<PixelHit2DScalar, 2, 2> A = Matrix<PixelHit2DScalar, 2, 2>::Identity();
-            
-            const PixelHit2DJacobian H = jacheig.bottomRightCorner<2,2>().cast<PixelHit2DScalar>();
+          const unsigned int fullstateidx = 5*(ihit+1) + 3;
+          const unsigned int fullparmidx = nstateparms+parmidx;
 
-            const PixelHit2DVector dh = dy0 - H*dx - A*dalpha;
-            const PixelHit2DScalar chisq = dh.transpose()*Vinv*dh;
-            
-            auto const& gradlocal = chisq.value().derivatives();
-            //fill local hessian
-            Matrix<double, nlocal, nlocal> hesslocal;
-            for (unsigned int j=0; j<nlocal; ++j) {
-              hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-            }
-            
-            //fill global gradient
-            gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
-            gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
-
-            //fill global hessian (upper triangular blocks only)
-            hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-            hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-            hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
-            
-            for (unsigned int idim=0; idim<2; ++idim) {
-              const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, preciseHit->geographicalId()));
-              globalidxv[parmidx] = xglobalidx;
-              parmidx++;
-            }
-          }
-          else {
+          if (preciseHit->dimension()==1) {
             constexpr unsigned int nlocalalignment = 1;
             constexpr unsigned int nlocalparms = nlocalalignment;
             constexpr unsigned int nlocal = nlocalstate + nlocalparms;
             
-            StripHitVector dy0;
-            dy0[0] = StripHitScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
-            dy0[1] = StripHitScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
-            
-            const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
+            const StripHitScalar dy0(preciseHit->localPosition().x() - updtsos.localPosition().x());
+            const StripHitScalar Vinv(1./preciseHit->localPositionError().xx());
             
             StripHitVector dx = StripHitVector::Zero();
             for (unsigned int j=0; j<dx.size(); ++j) {
               init_twice_active_var(dx[j], nlocal, localstateidx + j);
             }
             
+            //single alignment parameter
             StripHitScalar dalpha(0.);
             init_twice_active_var(dalpha, nlocal, localalignmentidx);
 
-            Matrix<StripHitScalar, 2, 1> A = Matrix<StripHitScalar, 2, 1>::Zero();
-            A(0,0) = StripHitScalar(1.);
             
-            const StripHit2DJacobian H = jacheig.bottomRightCorner<2,2>().cast<StripHitScalar>();
-
-            StripHitVector dh = dy0 - H*dx - A*dalpha;
-            StripHitScalar chisq = dh.transpose()*Vinv*dh;
-
+            const StripHitScalar A(1.);
+            
+            const StripHit1DJacobian H = jacheig.block<1,2>(3,3).cast<StripHitScalar>();
+            
+            StripHitScalar dh = dy0 - (H*dx)[0] - A*dalpha;
+            StripHitScalar chisq = dh*dh*Vinv;
+            
             auto const& gradlocal = chisq.value().derivatives();
             //fill local hessian
             Matrix<double, nlocal, nlocal> hesslocal;
@@ -970,18 +1022,195 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             const unsigned int xglobalidx = detidparms.at(std::make_pair(0,preciseHit->geographicalId()));
             globalidxv[parmidx] = xglobalidx;
             parmidx++;
+          }
+          else if (preciseHit->dimension()==2) {
+            bool ispixel = GeomDetEnumerators::isTrackerPixel(detectorG->subDetector());
+
+            Matrix2d iV;
+            iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
+                  preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
             
+            if (ispixel) {
+              constexpr unsigned int nlocalalignment = 2;
+              constexpr unsigned int nlocalparms = nlocalalignment;
+              constexpr unsigned int nlocal = nlocalstate + nlocalparms;
+              
+              PixelHit2DVector dy0;
+              dy0[0] = PixelHit2DScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
+              dy0[1] = PixelHit2DScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
+              
+              const PixelHit2DCovariance Vinv = iV.inverse().cast<PixelHit2DScalar>();
+              
+              PixelHit2DVector dx = PixelHit2DVector::Zero();
+              for (unsigned int j=0; j<dx.size(); ++j) {
+                init_twice_active_var(dx[j], nlocal, localstateidx + j);
+              }
+              
+              //two alignment parameters
+              PixelHit2DVector dalpha = PixelHit2DVector::Zero();
+              for (unsigned int idim=0; idim<2; ++idim) {
+                init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
+              }
+              const Matrix<PixelHit2DScalar, 2, 2> A = Matrix<PixelHit2DScalar, 2, 2>::Identity();
+              
+              const PixelHit2DJacobian H = jacheig.bottomRightCorner<2,2>().cast<PixelHit2DScalar>();
+
+              const PixelHit2DVector dh = dy0 - H*dx - A*dalpha;
+              const PixelHit2DScalar chisq = dh.transpose()*Vinv*dh;
+              
+              auto const& gradlocal = chisq.value().derivatives();
+              //fill local hessian
+              Matrix<double, nlocal, nlocal> hesslocal;
+              for (unsigned int j=0; j<nlocal; ++j) {
+                hesslocal.row(j) = chisq.derivatives()[j].derivatives();
+              }
+              
+              //fill global gradient
+              gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
+              gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+
+              //fill global hessian (upper triangular blocks only)
+              hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
+              hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
+              hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
+              
+              for (unsigned int idim=0; idim<2; ++idim) {
+                const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, preciseHit->geographicalId()));
+                globalidxv[parmidx] = xglobalidx;
+                parmidx++;
+              }
+            }
+            else {
+              constexpr unsigned int nlocalalignment = 1;
+              constexpr unsigned int nlocalparms = nlocalalignment;
+              constexpr unsigned int nlocal = nlocalstate + nlocalparms;
+              
+              StripHitVector dy0;
+              dy0[0] = StripHitScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
+              dy0[1] = StripHitScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
+              
+              const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
+              
+              StripHitVector dx = StripHitVector::Zero();
+              for (unsigned int j=0; j<dx.size(); ++j) {
+                init_twice_active_var(dx[j], nlocal, localstateidx + j);
+              }
+              
+              StripHitScalar dalpha(0.);
+              init_twice_active_var(dalpha, nlocal, localalignmentidx);
+
+              Matrix<StripHitScalar, 2, 1> A = Matrix<StripHitScalar, 2, 1>::Zero();
+              A(0,0) = StripHitScalar(1.);
+              
+              const StripHit2DJacobian H = jacheig.bottomRightCorner<2,2>().cast<StripHitScalar>();
+
+              StripHitVector dh = dy0 - H*dx - A*dalpha;
+              StripHitScalar chisq = dh.transpose()*Vinv*dh;
+
+              auto const& gradlocal = chisq.value().derivatives();
+              //fill local hessian
+              Matrix<double, nlocal, nlocal> hesslocal;
+              for (unsigned int j=0; j<nlocal; ++j) {
+                hesslocal.row(j) = chisq.derivatives()[j].derivatives();
+              }
+              
+              //fill global gradient
+              gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
+              gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+
+              //fill global hessian (upper triangular blocks only)
+              hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
+              hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
+              hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
+              
+              const unsigned int xglobalidx = detidparms.at(std::make_pair(0,preciseHit->geographicalId()));
+              globalidxv[parmidx] = xglobalidx;
+              parmidx++;
+              
+            }
           }
         }
       }
       
+      if (!valid) {
+        break;
+      }
+      
+      //now do the expensive calculations and fill outputs
+      auto const& dchisqdx = gradfull.head(nstateparms);
+      auto const& dchisqdparms = gradfull.tail(npars);
+      
+      auto const& d2chisqdx2 = hessfull.topLeftCorner(nstateparms, nstateparms);
+      auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
+      auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
+      
+  //     auto const& eigenvalues = d2chisqdx2.eigenvalues();
+  //     std::cout << "d2chisqdx2 eigenvalues" << std::endl;
+  //     std::cout << eigenvalues << std::endl;
+      
+//       auto const& Cinvd = d2chisqdx2.ldlt();
+      Cinvd.compute(d2chisqdx2);
+      
+      dxfull = -Cinvd.solve(dchisqdx);
+      
+//       const Vector5d dxRef = dx.head<5>();
+// //       const Vector5d dxRef = -Cinvd.solve(dchisqdx).head<5>();
+//       const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
+      
+//       dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
+//       
+//       grad = dchisqdparms + dxdparms*dchisqdx;
+//       hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
+//       
+      const Vector5d dxRef = dxfull.head<5>();
+      const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
+
+//       std::cout<< "dxRef" << std::endl;
+//       std::cout<< dxRef << std::endl;
+      
+      //fill output with corrected state and covariance at reference point
+      refParms.fill(0.);
+      refCov.fill(0.);
+//       const AlgebraicVector5& refVec = track.parameters();
+      CurvilinearTrajectoryParameters curvparms(refFts.position(), refFts.momentum(), refFts.charge());
+      const AlgebraicVector5& refVec = curvparms.vector();
+      Map<Vector5f>(refParms.data()) = (Map<const Vector5d>(refVec.Array()) + dxRef).cast<float>();
+      Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Cinner).cast<float>().triangularView<Upper>();
+      
+      if (iiter==0) {
+        refParms_iter0 = refParms;
+        refCov_iter0 = refCov;
+      }
+//       else if (iiter==2) {
+//         refParms_iter2 = refParms;
+//         refCov_iter2 = refCov;        
+//       }
+      
+//       std::cout << "refParms" << std::endl;
+//       std::cout << Map<const Vector5f>(refParms.data()) << std::endl;
+      
+//   //     gradv.clear();
+//       jacrefv.clear();
+// 
+//   //     gradv.resize(npars,0.);
+//       jacrefv.resize(5*npars, 0.);
+//       
+//       nJacRef = 5*npars;
+//   //     tree->SetBranchAddress("gradv", gradv.data());
+//       tree->SetBranchAddress("jacrefv", jacrefv.data());
+//       
+//       //eigen representation of the underlying vector storage
+//   //     Map<VectorXf> gradout(gradv.data(), npars);
+//       Map<Matrix<float, 5, Dynamic, RowMajor> > jacrefout(jacrefv.data(), 5, npars);
+//       
+//       jacrefout = dxdparms.leftCols<5>().transpose().cast<float>();
+    
     }
     
     if (!valid) {
       continue;
     }
     
-    //now do the expensive calculations and fill outputs
     auto const& dchisqdx = gradfull.head(nstateparms);
     auto const& dchisqdparms = gradfull.tail(npars);
     
@@ -989,22 +1218,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
     auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
     
-    auto const& Cinvd = d2chisqdx2.ldlt();
+    dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
     
-    const Vector5d dxRef = -Cinvd.solve(dchisqdx).head<5>();
-    const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
+    grad = dchisqdparms + dxdparms*dchisqdx;
+    hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
     
-    const MatrixXd dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
-    
-    const VectorXd grad = dchisqdparms + dxdparms*dchisqdx;
-    const MatrixXd hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
-    
-    //fill output with corrected state and covariance at reference point
-    refParms.fill(0.);
-    refCov.fill(0.);
-    const AlgebraicVector5& refVec = track.parameters();
-    Map<Vector5f>(refParms.data()) = (Map<const Vector5d>(refVec.Array()) + dxRef).cast<float>();
-    Map<Matrix<float, 5, 5, RowMajor> >(refCov.data()).triangularView<Upper>() = (2.*Cinner).cast<float>().triangularView<Upper>();
+//     const Vector5d dxRef = dxfull.head<5>();
+//     const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
+
     
 //     gradv.clear();
     jacrefv.clear();
@@ -1020,7 +1241,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     Map<VectorXf> gradout(gradv.data(), npars);
     Map<Matrix<float, 5, Dynamic, RowMajor> > jacrefout(jacrefv.data(), 5, npars);
     
-    jacrefout = dxdparms.leftCols<5>().transpose().cast<float>();
+    jacrefout = dxdparms.leftCols<5>().transpose().cast<float>();    
     
 //     gradout = grad.cast<float>();
     
@@ -1476,6 +1697,251 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::materialEffectsJacobian(cons
   EdE(0,5) = res_3;
   
   return EdE;
+}
+
+std::array<Matrix<double, 5, 5>, 5> ResidualGlobalCorrectionMaker::processNoiseJacobians(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const {
+  
+  //this is the variation of the process noise matrix with respect to the relevant local parameters (qop, dxdz, dydz) and the material parameters xi and radlen
+  
+  const double m2 = pow(updator.mass(), 2);  // use mass hypothesis from constructor
+  constexpr double emass = 0.511e-3;
+  constexpr double logfact = 0.038;
+  constexpr double amscon = 1.8496e-4;  // (13.6MeV)**2
+  const double qop = tsos.localParameters().qbp();
+  const double dxdz = tsos.localParameters().dxdz();
+  const double dydz = tsos.localParameters().dydz();
+  const double signpz = tsos.localParameters().pzSign();
+  const double xi = tsos.surface().mediumProperties().xi();
+  const double radLen = tsos.surface().mediumProperties().radLen();
+    
+  const double x0 = std::pow(qop, 5);
+  const double x1 = std::pow(qop, 2);
+  const double x2 = 1.0/x1;
+  const double x3 = m2 + x2;
+  const double x4 = 1.0/x3;
+  const double x5 = x2*x4;
+  const double x6 = 1 - 1.0/2.0*x5;
+  const double x7 = std::pow(dxdz, 2);
+  const double x8 = std::pow(dydz, 2);
+  const double x9 = x7 + x8;
+  const double x10 = x9 + 1;
+  const double x11 = std::sqrt(x10);
+  const double x12 = x11*xi;
+  const double x13 = x12*x6;
+  const double x14 = std::pow(x3, 2);
+  const double x15 = std::pow(emass, 2);
+  const double x16 = 1.0/m2;
+  const double x17 = std::sqrt(x3);
+  const double x18 = emass*x16;
+  const double x19 = 2*x18;
+  const double x20 = x15*x16 + x17*x19 + 1;
+  const double x21 = 1.0/x20;
+  const double x22 = x19*x21;
+  const double x23 = x14*x22;
+  const double x24 = x18*x21;
+  const double x25 = 8*x24;
+  const double x26 = std::fabs(qop);
+  const double x27 = (((qop) > 0) - ((qop) < 0));
+  const double x28 = 1.0/x27;
+  const double x29 = x28/x26;
+  const double x30 = x13*x29;
+  const double x31 = std::pow(qop, 4);
+  const double x32 = x3*x31;
+  const double x33 = 14*x24;
+  const double x34 = std::pow(x3, 3.0/2.0);
+  const double x35 = std::pow(qop, 3);
+  const double x36 = 1.0/x14;
+  const double x37 = std::pow(qop, 7)*x23*x29;
+  const double x38 = x37*x6;
+  const double x39 = x38*xi/x11;
+  const double x40 = std::pow(signpz, 2);
+  const double x41 = x40/x10;
+  const double x42 = x41*x7;
+  const double x43 = x41*x8;
+  const double x44 = x42 + x43;
+  const double x45 = 1.0/x44;
+  const double x46 = 1.0*x45;
+  const double x47 = std::pow(x10, 2);
+  const double x48 = 1.0/x47;
+  const double x49 = std::pow(signpz, 4);
+  const double x50 = x48*x49;
+  const double x51 = x46*x50;
+  const double x52 = x42*x46 + x51*x8;
+  const double x53 = amscon*radLen;
+  const double x54 = 1.0/x49;
+  const double x55 = std::pow(x10, 5.0/2.0)*x54;
+  const double x56 = x53*x55;
+  const double x57 = x52*x56;
+  const double x58 = radLen*x11;
+  const double x59 = x29*x58;
+  const double x60 = logfact*std::log(qop*x59) + 1;
+  const double x61 = std::pow(x60, 2);
+  const double x62 = x3*x35;
+  const double x63 = 1.0*x62;
+  const double x64 = x61*x63;
+  const double x65 = x29*x61;
+  const double x66 = x57*x65;
+  const double x67 = 2.0*x1;
+  const double x68 = amscon*x52;
+  const double x69 = logfact*x60;
+  const double x70 = x54*x69;
+  const double x71 = 1.0/qop;
+  const double x72 = 2.0*x3;
+  const double x73 = x31*x72*(-x58*x71 + x59);
+  const double x74 = x47*x70*x73;
+  const double x75 = std::pow(x10, 3.0/2.0);
+  const double x76 = x53*x75;
+  const double x77 = dxdz*x76;
+  const double x78 = x52*x77;
+  const double x79 = x0*x29*x72;
+  const double x80 = x70*x79;
+  const double x81 = x3*x65;
+  const double x82 = x0*x81;
+  const double x83 = 5.0*x54*x82;
+  const double x84 = 2.0*x45;
+  const double x85 = dxdz*x84;
+  const double x86 = std::pow(dxdz, 3);
+  const double x87 = x40*x48;
+  const double x88 = x84*x87;
+  const double x89 = dxdz*x8;
+  const double x90 = 4.0*x45*x49/std::pow(x10, 3);
+  const double x91 = 2*x41;
+  const double x92 = 2*x87;
+  const double x93 = 1.0/std::pow(x44, 2);
+  const double x94 = x93*(-dxdz*x91 + x86*x92 + x89*x92);
+  const double x95 = x50*x8;
+  const double x96 = 1.0*x82;
+  const double x97 = x56*x96;
+  const double x98 = dydz*x76;
+  const double x99 = x80*x98;
+  const double x100 = x83*x98;
+  const double x101 = dydz*x84;
+  const double x102 = std::pow(dydz, 3);
+  const double x103 = dydz*x7;
+  const double x104 = x93*(-dydz*x91 + x102*x92 + x103*x92);
+  const double x105 = x55*x68;
+  const double x106 = x69*x79;
+  const double x107 = x26*x27;
+  const double x108 = x107*x61;
+  const double x109 = 1.0/x40;
+  const double x110 = dxdz*dydz*x109;
+  const double x111 = x110*x76;
+  const double x112 = x1*x3;
+  const double x113 = x112*x61;
+  const double x114 = amscon*x110;
+  const double x115 = x108*x63;
+  const double x116 = x109*x115;
+  const double x117 = amscon*x109*x58;
+  const double x118 = x103*x117;
+  const double x119 = x107*x60;
+  const double x120 = 2.0*x62;
+  const double x121 = logfact*x119*x120;
+  const double x122 = 3.0*x108*x62;
+  const double x123 = x117*x89;
+  const double x124 = x114*x75;
+  const double x125 = x43*x46 + x51*x7;
+  const double x126 = x125*x56;
+  const double x127 = amscon*x125;
+  const double x128 = x125*x77;
+  const double x129 = x50*x7;
+  const double x130 = x127*x55;
+  const double x131 = -x5;
+  const double x132 = x131 + 1;
+  const double x133 = qop*x3;
+  const double x134 = x131 + 2;
+  const double x135 = x132*x29;
+  const double x136 = x134*x14;
+  const double x137 = x112*x29;
+  const double x138 = x136*x29;
+  const double x139 = x134*x29;
+  const double x140 = x1*x139;
+  const double x141 = qop*x22;
+  const double x142 = 4*x24;
+  const double x143 = 4.0*x61;
+  const double x144 = logfact*(x29 - x71);
+  const double x145 = x144*x60;
+  const double x146 = -8.0*qop*x145;
+  const double x147 = 20.0*x62;
+  const double x148 = 4.0*x112;
+  const double x149 = x144*(-x119*x2 + x144 + x60*x71);
+  const double x150 = x56*(-14.0*qop*x65 - 8.0*x113 + x143 + x145*x147 - x145*x148*x26*x28 + x146 + x147*x65 + x149*x79)/x9;
+  const double x151 = 6.0*x108;
+  const double delosdqop = std::pow(qop, 6)*x14*x30*x33 - x0*x13*x23 + x12*x37*(x4/x35 - x36/x0) - x25*x30*x32 + 4*x15*x30*x31*x34/(std::pow(m2, 2)*std::pow(x20, 2));
+  const double delosddxdz = dxdz*x39;
+  const double delosddydz = dydz*x39;
+  const double delosdxi = x11*x38;
+  const double delosdradLen = 0;
+  const double dmsxxdqop = 5.0*x32*x66 - x57*x64 - x66*x67 + x68*x74;
+  const double dmsxxddxdz = x78*x80 + x78*x83 + x97*(x41*x85 + x42*x94 - x86*x88 - x89*x90 + x94*x95);
+  const double dmsxxddydz = x100*x52 + x52*x99 + x97*(x101*x50 - x102*x90 - x103*x88 + x104*x42 + x104*x95);
+  const double dmsxxdxi = 0;
+  const double dmsxxdradLen = x105*x106 + x105*x96;
+  const double dmsxydqop = x10*x114*x69*x73 + 3.0*x107*x111*x113 - 2.0*x108*x111 + x111*x64;
+  const double dmsxyddxdz = x116*x98 + x118*x121 + x118*x122;
+  const double dmsxyddydz = x116*x77 + x121*x123 + x122*x123;
+  const double dmsxydxi = 0;
+  const double dmsxydradLen = x115*x124 + x121*x124;
+  const double dmsyydqop = 5.0*x126*x31*x81 - x126*x64 - x126*x65*x67 + x127*x74;
+  const double dmsyyddxdz = x128*x80 + x128*x83 + x97*(x129*x94 + x43*x94 + x50*x85 - x8*x85*x87 - x86*x90);
+  const double dmsyyddydz = x100*x125 + x125*x99 + x97*(x101*x41 - x102*x88 - x103*x90 + x104*x129 + x104*x43);
+  const double dmsyydxi = 0;
+  const double dmsyydradLen = x106*x130 + x130*x96;
+  const double d2elosdqop2 = x12*x141*(x1*x138*x24*(x142*x5 + x2/x34 - 3/x17) + 14*x112*x135 - 2*x132*x133 + 4*x133*x134 - 28*x134*x137 - x134*x141*x34 + x135*x142*x17 - 8*x135 - 6*x136*x35 - x137*(-7*x5 + 3 + 4*x36/x31) + 21*x138*x31 - x139*x17*x25 + x140*x33*x34 + 2*x140*(3*m2 + 5*x2));
+  const double d2msxxdqop2 = x150*(x43 + x7);
+  const double d2msxydqop2 = x111*(x107*x120*x149 + 6.0*x113 + x119*x144*x148 + x133*x151 - x143 + 12.0*x145*x62 + x146 - x151*x71);
+  const double d2msyydqop2 = x150*(x42 + x8);
+  
+  std::array<Matrix<double, 5, 5>, 5> res;
+  
+  Matrix<double, 5, 5> &dQdqop = res[0];
+  dQdqop = Matrix<double, 5, 5>::Zero();
+  dQdqop(0,0) = delosdqop;
+  dQdqop(1,1) = dmsxxdqop;
+  dQdqop(1,2) = dmsxydqop;
+  dQdqop(2,1) = dmsxydqop;
+  dQdqop(2,2) = dmsyydqop;
+  
+//   Matrix<double, 5, 5> &d2Qdqop2 = res[1];
+//   d2Qdqop2 = Matrix<double, 5, 5>::Zero();
+// //   d2Qdqop2(0,0) = d2elosdqop2;
+//   d2Qdqop2(1,1) = d2msxxdqop2;
+//   d2Qdqop2(1,2) = d2msxydqop2;
+//   d2Qdqop2(2,1) = d2msxydqop2;
+//   d2Qdqop2(2,2) = d2msyydqop2;
+  
+  Matrix<double, 5, 5> &dQddxdz = res[1];
+  dQddxdz = Matrix<double, 5, 5>::Zero();
+  dQddxdz(0,0) = delosddxdz;
+  dQddxdz(1,1) = dmsxxddxdz;
+  dQddxdz(1,2) = dmsxyddxdz;
+  dQddxdz(2,1) = dmsxyddxdz;
+  dQddxdz(2,2) = dmsyyddxdz;
+  
+  Matrix<double, 5, 5> &dQddydz = res[2];
+  dQddydz = Matrix<double, 5, 5>::Zero();
+  dQddydz(0,0) = delosddydz;
+  dQddydz(1,1) = dmsxxddydz;
+  dQddydz(1,2) = dmsxyddydz;
+  dQddydz(2,1) = dmsxyddydz;
+  dQddydz(2,2) = dmsyyddydz;
+  
+  Matrix<double, 5, 5> &dQdxi = res[3];
+  dQdxi = Matrix<double, 5, 5>::Zero();
+  dQdxi(0,0) = delosdxi;
+  dQdxi(1,1) = dmsxxdxi;
+  dQdxi(1,2) = dmsxydxi;
+  dQdxi(2,1) = dmsxydxi;
+  dQdxi(2,2) = dmsyydxi;
+  
+  Matrix<double, 5, 5> &dQdradLen = res[4];
+  dQdradLen = Matrix<double, 5, 5>::Zero();
+  dQdradLen(0,0) = delosdradLen;
+  dQdradLen(1,1) = dmsxxdradLen;
+  dQdradLen(1,2) = dmsxydradLen;
+  dQdradLen(2,1) = dmsxydradLen;
+  dQdradLen(2,2) = dmsyydradLen;
+//   
+  return res;
 }
 
 template <unsigned int D>
