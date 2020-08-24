@@ -55,6 +55,10 @@
 #include "DataFormats/Math/interface/ProjectMatrix.h"
 #include "TrackingTools/Records/interface/TrackingComponentsRecord.h" 
 
+#include "FWCore/ServiceRegistry/interface/Service.h"
+#include "CommonTools/UtilAlgos/interface/TFileService.h"
+
+
 
 
 
@@ -185,8 +189,11 @@ private:
   edm::EDGetTokenT<std::vector<int> > inputIndices_;
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
 
-  TFile *fout;
+//   TFile *fout;
   TTree *tree;
+  TTree *runtree;
+  TTree *gradtree;
+  TTree *hesstree;
 
   float trackEta;
   float trackPhi;
@@ -245,6 +252,9 @@ private:
   
   std::unordered_map<std::pair<unsigned int, unsigned int>, double> hessaggsparse;
   
+  bool fitFromGenParms_;
+  bool fillTrackTree_;
+  
 };
 
 //
@@ -269,67 +279,80 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
   inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag("generalTracks"));
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
+  
+  fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
+  fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
 
 
 //   fout = new TFile("trackTreeGrads.root", "RECREATE");
 //   fout = new TFile("trackTreeGradsdebug.root", "RECREATE");
-  fout = new TFile("trackTreeGrads.root", "RECREATE");
+//   fout = new TFile("trackTreeGrads.root", "RECREATE");
   //TODO this needs a newer root version
 //   fout->SetCompressionAlgorithm(ROOT::kLZ4);
 //   fout->SetCompressionLevel(3);
-  tree = new TTree("tree", "tree");
+  
+  edm::Service<TFileService> fs;
+  
+//   tree = new TTree("tree", "tree");
+  
+  runtree = fs->make<TTree>("runtree","");
+  gradtree = fs->make<TTree>("gradtree","");
+  hesstree = fs->make<TTree>("hesstree","");
   
   
-  const int basketSize = 4*1024*1024;
-  tree->SetAutoFlush(0);
-  
-  tree->Branch("trackPt", &trackPt, basketSize);
-  tree->Branch("trackPtErr", &trackPtErr, basketSize);
-  tree->Branch("trackEta", &trackEta, basketSize);
-  tree->Branch("trackPhi", &trackPhi, basketSize);
-  tree->Branch("trackCharge", &trackCharge, basketSize);
-  //workaround for older ROOT version inability to store std::array automatically
-//   tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
-//   tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
-  tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
-  tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
-  
-  tree->Branch("refParms_iter0", refParms_iter0.data(), "refParms_iter0[5]/F", basketSize);
-  tree->Branch("refCov_iter0", refCov_iter0.data(), "refCov_iter0[25]/F", basketSize);
-//   tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
-//   tree->Branch("refCov_iter2", refCov_iter2.data(), "refCov_iter2[25]/F", basketSize);  
-  
-  tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
-  tree->Branch("refCov", refCov.data(), "refCov[25]/F", basketSize);
-  tree->Branch("genParms", genParms.data(), "genParms[5]/F", basketSize);
+  if (fillTrackTree_) {
+    tree = fs->make<TTree>("tree","");
+    const int basketSize = 4*1024*1024;
+    tree->SetAutoFlush(0);
+    
+    tree->Branch("trackPt", &trackPt, basketSize);
+    tree->Branch("trackPtErr", &trackPtErr, basketSize);
+    tree->Branch("trackEta", &trackEta, basketSize);
+    tree->Branch("trackPhi", &trackPhi, basketSize);
+    tree->Branch("trackCharge", &trackCharge, basketSize);
+    //workaround for older ROOT version inability to store std::array automatically
+  //   tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
+  //   tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
+    tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
+    tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
+    
+    tree->Branch("refParms_iter0", refParms_iter0.data(), "refParms_iter0[5]/F", basketSize);
+    tree->Branch("refCov_iter0", refCov_iter0.data(), "refCov_iter0[25]/F", basketSize);
+  //   tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
+  //   tree->Branch("refCov_iter2", refCov_iter2.data(), "refCov_iter2[25]/F", basketSize);  
+    
+    tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
+    tree->Branch("refCov", refCov.data(), "refCov[25]/F", basketSize);
+    tree->Branch("genParms", genParms.data(), "genParms[5]/F", basketSize);
 
-  tree->Branch("genPt", &genPt, basketSize);
-  tree->Branch("genEta", &genEta, basketSize);
-  tree->Branch("genPhi", &genPhi, basketSize);
-  tree->Branch("genCharge", &genCharge, basketSize);
-  
-  tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
-  
-  tree->Branch("nHits", &nHits, basketSize);
-  tree->Branch("nValidHits", &nValidHits, basketSize);
-  tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
-  tree->Branch("nParms", &nParms, basketSize);
-  tree->Branch("nJacRef", &nJacRef, basketSize);
-  
-//   tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
-  tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
-  tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
-  
-//   tree->Branch("nSym", &nSym, basketSize);
-  
-//   tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
-  
-  tree->Branch("run", &run);
-  tree->Branch("lumi", &lumi);
-  tree->Branch("event", &event);
-  
-  tree->Branch("gradmax", &gradmax);
-  tree->Branch("hessmax", &hessmax);
+    tree->Branch("genPt", &genPt, basketSize);
+    tree->Branch("genEta", &genEta, basketSize);
+    tree->Branch("genPhi", &genPhi, basketSize);
+    tree->Branch("genCharge", &genCharge, basketSize);
+    
+    tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
+    
+    tree->Branch("nHits", &nHits, basketSize);
+    tree->Branch("nValidHits", &nValidHits, basketSize);
+    tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
+    tree->Branch("nParms", &nParms, basketSize);
+    tree->Branch("nJacRef", &nJacRef, basketSize);
+    
+  //   tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
+    tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
+    tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
+    
+  //   tree->Branch("nSym", &nSym, basketSize);
+    
+  //   tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+    
+    tree->Branch("run", &run);
+    tree->Branch("lumi", &lumi);
+    tree->Branch("event", &event);
+    
+    tree->Branch("gradmax", &gradmax);
+    tree->Branch("hessmax", &hessmax);
+  }
 
 }
 
@@ -347,6 +370,9 @@ ResidualGlobalCorrectionMaker::~ResidualGlobalCorrectionMaker()
 // ------------ method called for each event  ------------
 void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetup)
 {
+  
+  const bool dogen = fitFromGenParms_;
+  
   using namespace edm;
 
   Handle<std::vector<reco::GenParticle>> genPartCollection;
@@ -441,6 +467,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
 //     std::cout << "track charge: " << track.charge() << " trackorig charge " << trackOrig.charge() << "inner state charge " << tms.back().updatedState().charge() << std::endl;
     
+    const reco::GenParticle* genpart = nullptr;
+    
     genPt = -99.;
     genEta = -99.;
     genPhi = -99.;
@@ -459,6 +487,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       if (dR < 0.15)
       {
+        genpart = &(*g);
+        
         genPt = g->pt();
         genEta = g->eta();
         genPhi = g->phi();
@@ -626,13 +656,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     globalidxv.resize(npars, 0);
     
     nParms = npars;
-    tree->SetBranchAddress("globalidxv", globalidxv.data());
+    if (fillTrackTree_) {
+      tree->SetBranchAddress("globalidxv", globalidxv.data());
+    }
     
 //     TrajectoryStateOnSurface currtsos;
     
     
-//     std::cout << "initial reference point parameters:" << std::endl;
-//     std::cout << track.parameters() << std::endl;
     
     VectorXd dxfull;
     MatrixXd dxdparms;
@@ -640,23 +670,61 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     MatrixXd hess;
     LDLT<MatrixXd> Cinvd;
     
-    auto const& refpoint = track.referencePoint();
-    auto const& trackmom = track.momentum();
+    if (dogen && genpart==nullptr) {
+      continue;
+    }
     
-    const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
-    const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z());
-    const GlobalTrajectoryParameters refglobal(refpos, refmom, track.charge(), field);
-    const CurvilinearTrajectoryError referr(track.covariance());
+//     if (dogen && genpart->eta()>-2.3) {
+//       continue;
+//     }
+
+    if (genpart==nullptr) {
+      continue;
+    }
+    if (genpart->pt()<100.) {
+      continue;
+    }
+    if (genpart->eta()>-2.3) {
+      continue;
+    }
     
-    //initialize states
-    FreeTrajectoryState refFts(refpos, refmom, track.charge(), field);
+    std::cout << "initial reference point parameters:" << std::endl;
+    std::cout << track.parameters() << std::endl;
+
+    
+    FreeTrajectoryState refFts;
+    FreeTrajectoryState currentFts;
+    
+    if (dogen) {
+      //init from gen state
+      auto const& refpoint = genpart->vertex();
+      auto const& trackmom = genpart->momentum();
+      const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
+      const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
+      const GlobalTrajectoryParameters refglobal(refpos, refmom, genpart->charge(), field);
+      
+      //zero uncertainty on generated parameters
+      AlgebraicSymMatrix55 nullerr;
+      const CurvilinearTrajectoryError referr(nullerr);
+      
+      refFts = FreeTrajectoryState(refpos, refmom, genpart->charge(), field);
+      currentFts = FreeTrajectoryState(refglobal, referr);
+    }
+    else {
+      //init from track state
+      auto const& refpoint = track.referencePoint();
+      auto const& trackmom = track.momentum();
+      const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
+      const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
+      const GlobalTrajectoryParameters refglobal(refpos, refmom, track.charge(), field);
+      const CurvilinearTrajectoryError referr(track.covariance());
+      refFts = FreeTrajectoryState(refpos, refmom, track.charge(), field);
+      currentFts = FreeTrajectoryState(refglobal, referr);
+    }
+
     std::vector<TrajectoryStateOnSurface> layerStates;
     layerStates.reserve(nhits);
     
-//     std::cout << "initial reffts:" << std::endl;
-//     std::cout << refFts.parameters().vector() << std::endl;
-    
-    FreeTrajectoryState currentFts(refglobal, referr);
     //inflate errors
     currentFts.rescaleError(100.);
     
@@ -666,9 +734,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     unsigned int alignmentidx = 0;
 //     unsigned int bfieldidx = 0;
 //     unsigned int elossidx = 0;
-
-    for (unsigned int iiter=0; iiter<4; ++iiter) {
-//       std::cout<< "iter " << iiter << std::endl;
+    
+//     constexpr unsigned int niters = 4;
+    constexpr unsigned int niters = 10;
+    
+    for (unsigned int iiter=0; iiter<niters; ++iiter) {
+      std::cout<< "iter " << iiter << std::endl;
       
       gradfull = VectorXd::Zero(nparmsfull);
       hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
@@ -727,6 +798,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         AnalyticalCurvilinearJacobian curvjac(currentFts.parameters(), updtsos.globalParameters().position(), updtsos.globalParameters().momentum(), s);
         const AlgebraicMatrix55 &jacF = curvjac.jacobian();
         MSJacobian F = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).cast<MSScalar>();
+//         const Matrix<double, 5, 1> Fqop = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).col(0);
+//         std::cout << "Fqop from CMSSW" << std::endl;
+//         std::cout << Fqop << std::endl;
         
         //bfield jacobian
         const MSVector dF = bfieldJacobian(currentFts.parameters(), updtsos.globalParameters(), s).cast<MSScalar>();
@@ -766,8 +840,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         //get the process noise matrix
         AlgebraicMatrix55 const Qmat = tmptsos.localError().matrix();
         Map<const Matrix<double, 5, 5, RowMajor> >iQ(Qmat.Array());
-  //       std::cout<< "Q" << std::endl;
-  //       std::cout<< iQ << std::endl;
+//         std::cout<< "Q" << std::endl;
+//         std::cout<< iQ << std::endl;
         MSCovariance Qinv = MSCovariance::Zero();
         //Q is 3x3 in the upper left block because there is no displacement on thin scattering layers
         //so invert the upper 3x3 block
@@ -793,14 +867,19 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
         if (iiter==0) {
           //current state from predicted state
-          if (hit->isValid()) {
+//           if (hit->isValid()) {
+          if (false) {
             idx0 = update(updtsos, *preciseHit);
+//             std::cout << "before KF update, ihit " << ihit << std::endl;
+//             std::cout << updtsos.localParameters().vector() << std::endl;
             updtsos = updator.update(updtsos, *preciseHit);
             if (!updtsos.isValid()) {
-              std::cout << "Kalman filter update failed" << std::endl;
+              std::cout << "Abort: Kalman filter update failed" << std::endl;
               valid = false;
               break;
             }
+//             std::cout << "after KF update" << std::endl;
+//             std::cout << updtsos.localParameters().vector() << std::endl;
           }
           layerStates.push_back(updtsos);
         }
@@ -856,8 +935,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           const unsigned int fullparmidx = nstateparms + parmidx;
           
           MSVector dxprev = MSVector::Zero();
-          for (unsigned int j=0; j<dxprev.size(); ++j) {
-            init_twice_active_var(dxprev[j], nlocal, localstateidx + j);
+          //suppress gradients for reference point state
+          if (!dogen || ihit>0) {
+            for (unsigned int j=0; j<dxprev.size(); ++j) {
+              init_twice_active_var(dxprev[j], nlocal, localstateidx + j);
+            }
           }
 
           MSVector dx = MSVector::Zero();
@@ -878,7 +960,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           
 //           MSScalar chisq;
 //           
-//           if (iiter<3) {
+//           if (ihit==0 || ihit == (nhits-1)) {
 //             //standard fit
 //             const MSVector dms = dx0 + H*dx - E*Hprop*F*dxprev - E*Hprop*dF*dbeta - dE*dxi;
 //             chisq = dms.transpose()*Qinv*dms;            
@@ -893,8 +975,16 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //             
 //             const MSCovariance dQ = dxprop[0]*dQdxprop0 + dxprop[1]*dQdxprop1 + dxprop[2]*dQdxprop2 + dxi*dQdxi;
 //             
-//             const Matrix<MSScalar, 3, 3> Qms = iQ.topLeftCorner<3,3>().cast<MSScalar>() + dQ.topLeftCorner<3,3>();
-//             Qinv.topLeftCorner<3,3>() = Qms.inverse();
+// //             const MSCovariance dQdxprop0 = dQs[0].cast<MSScalar>();
+// //             const MSCovariance d2Qdxprop02 = dQs[1].cast<MSScalar>();
+// //   //         
+// //             const MSCovariance dQ = dxprop[0]*dQdxprop0 + 0.5*dxprop[0]*dxprop[0]*d2Qdxprop02;
+//             
+// //             const Matrix<MSScalar, 3, 3> Qms = iQ.topLeftCorner<3,3>().cast<MSScalar>() + dQ.topLeftCorner<3,3>();
+// //             Qinv.topLeftCorner<3,3>() = Qms.inverse();
+//             const Matrix<MSScalar, 2, 2> Qms = iQ.block<2,2>(1,1).cast<MSScalar>() + dQ.block<2,2>(1,1);
+//             Qinv.block<2,2>(1,1) = Qms.inverse();
+//             
 //             const MSScalar logdetQ = Eigen::log(Qms.determinant());
 // 
 //             const MSVector dms = dx0 + H*dx - E*dxprop - E*Hprop*dF*dbeta - dE*dxi;
@@ -1136,6 +1226,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         break;
       }
       
+      //fake constraint on reference point parameters
+      if (dogen) {
+        for (unsigned int i=0; i<5; ++i) {
+          hessfull(i,i) = 1e6;
+        }
+      }
+      
       //now do the expensive calculations and fill outputs
       auto const& dchisqdx = gradfull.head(nstateparms);
       auto const& dchisqdparms = gradfull.tail(npars);
@@ -1165,8 +1262,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       const Vector5d dxRef = dxfull.head<5>();
       const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
 
-//       std::cout<< "dxRef" << std::endl;
-//       std::cout<< dxRef << std::endl;
+      std::cout<< "dxRef" << std::endl;
+      std::cout<< dxRef << std::endl;
       
       //fill output with corrected state and covariance at reference point
       refParms.fill(0.);
@@ -1186,8 +1283,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         refCov_iter2 = refCov;        
 //       }
       
-//       std::cout << "refParms" << std::endl;
-//       std::cout << Map<const Vector5f>(refParms.data()) << std::endl;
+      std::cout << "refParms" << std::endl;
+      std::cout << Map<const Vector5f>(refParms.data()) << std::endl;
       
 //   //     gradv.clear();
 //       jacrefv.clear();
@@ -1221,7 +1318,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
     
     grad = dchisqdparms + dxdparms*dchisqdx;
-    hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
+    //TODO check the simplification
+//     hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
+    hess = d2chisqdparms2 + dxdparms*d2chisqdxdparms;
     
 //     const Vector5d dxRef = dxfull.head<5>();
 //     const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
@@ -1235,7 +1334,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     nJacRef = 5*npars;
 //     tree->SetBranchAddress("gradv", gradv.data());
-    tree->SetBranchAddress("jacrefv", jacrefv.data());
+    if (fillTrackTree_) {
+      tree->SetBranchAddress("jacrefv", jacrefv.data());
+    }
     
     //eigen representation of the underlying vector storage
 //     Map<VectorXf> gradout(gradv.data(), npars);
@@ -1329,7 +1430,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //       packedidx += segmentsize;
 //     }
 
-    tree->Fill();
+    if (fillTrackTree_) {
+      tree->Fill();
+    }
   }
 }
 
@@ -1341,17 +1444,20 @@ void ResidualGlobalCorrectionMaker::beginJob()
 // ------------ method called once each job just after ending the event loop  ------------
 void ResidualGlobalCorrectionMaker::endJob()
 {
-  fout->cd();
+//   fout->cd();
   
-  TTree *gradtree = new TTree("gradtree","");
+//   TTree *gradtree = new TTree("gradtree","");
+  unsigned int idx;
   double gradval;
+  gradtree->Branch("idx",&idx);
   gradtree->Branch("gradval",&gradval);
   for (unsigned int i=0; i<gradagg.size(); ++i) {
+    idx = i;
     gradval = gradagg[i];
     gradtree->Fill();
   }
   
-  TTree *hesstree = new TTree("hesstree","");
+//   TTree *hesstree = new TTree("hesstree","");
   unsigned int iidx;
   unsigned int jidx;
   double hessval;
@@ -1366,8 +1472,8 @@ void ResidualGlobalCorrectionMaker::endJob()
     hesstree->Fill();
   }
   
-  fout->Write();
-  fout->Close();
+//   fout->Write();
+//   fout->Close();
 }
 
 // ------------ method called when starting to processes a run  ------------
@@ -1401,8 +1507,8 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
     }
   }
   
-  TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
-  TTree *runtree = new TTree("tree", "tree");
+//   TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
+//   TTree *runtree = new TTree("tree", "tree");
   
   unsigned int iidx;
   int parmtype;
@@ -1510,8 +1616,8 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
     runtree->Fill();
   }
   
-  runfout->Write();
-  runfout->Close();
+//   runfout->Write();
+//   runfout->Close();
   
   unsigned int nglobal = detidparms.size();
 //   std::sort(detidparms.begin(), detidparms.end());
@@ -1570,7 +1676,7 @@ Matrix<double, 5, 1> ResidualGlobalCorrectionMaker::bfieldJacobian(const GlobalT
   const Vector3d b(globalSource.magneticFieldInInverseGeV().x(),
                       globalSource.magneticFieldInInverseGeV().y(),
                       globalSource.magneticFieldInInverseGeV().z());
-  double magb = b.norm();
+  const double magb = b.norm();
   const Vector3d h = b.normalized();
 
   const Vector3d p0(globalSource.momentum().x(),
@@ -1579,60 +1685,146 @@ Matrix<double, 5, 1> ResidualGlobalCorrectionMaker::bfieldJacobian(const GlobalT
   const Vector3d p1(globalDest.momentum().x(),
                       globalDest.momentum().y(),
                       globalDest.momentum().z());
+  const Vector3d M0(globalSource.position().x(),
+                    globalSource.position().y(),
+                    globalSource.position().z());
   const Vector3d T0 = p0.normalized();
-  double p = p1.norm();
   const Vector3d T = p1.normalized();
-  double q = globalSource.charge();
+  const double p = p0.norm();
+  const double q = globalSource.charge();
+  const double qop = q/p;
 
-  const Vector3d N0 = h.cross(T0).normalized();
-  const double alpha = h.cross(T).norm();
+  const Vector3d N0alpha = h.cross(T0);
+  const double alpha = N0alpha.norm();
+  const Vector3d N0 = N0alpha.normalized();
   const double gamma = h.transpose()*T;
+  const Vector3d Z(0.,0.,1.);
+  const Vector3d U = Z.cross(T).normalized();
+  const Vector3d V = T.cross(U);
 
   //this is printed from sympy.printing.cxxcode together with sympy.cse for automatic substitution of common expressions
-  auto const xf0 = q/p;
-  auto const xf1 = s*xf0;
-  auto const xf2 = magb*xf1;
-  auto const xf3 = std::cos(xf2);
-  auto const xf4 = T0;
-  auto const xf5 = xf4;
-  auto const xf6 = std::sin(xf2);
-  auto const xf7 = alpha*xf6;
-  auto const xf8 = N0;
-  auto const xf9 = xf8;
-  auto const xf10 = magb*xf0;
-  auto const xf11 = xf10*xf3;
-  auto const xf12 = 1.0/magb;
-  auto const xf13 = p/q;
-  auto const xf14 = gamma*xf12*xf13;
-  auto const xf15 = h;
-  auto const xf16 = xf15;
-  auto const xf17 = 1 - xf3;
-  auto const xf18 = xf3*(xf4.transpose()) + (-xf7)*xf8.transpose() + (gamma*xf17)*(xf15.transpose());
-  auto const xf19 = s*xf12;
-  auto const xf20 = xf13/std::pow(magb, 2);
-  auto const xf21 = xf1*xf3;
-  auto const xf22 = (xf19*xf3 - xf20*xf6)*xf5 + (alpha*xf17*xf20 - xf19*xf7)*xf9 + (gamma*xf20*(-xf2 + xf6) - xf14*(-xf1 + xf21))*xf16;
-  auto const xf23 = xf1*xf6;
-  auto const xf24 = xf10*xf6;
-  auto const resf0 = -(xf3*xf5 + (-xf7)*xf9 + (-xf14*(-xf10 + xf11))*xf16)*xf18*xf22 + xf22;
-  auto const resf1 = (-p)*((-xf24)*xf5 + (-alpha*xf11)*xf9 + (gamma*xf24)*xf16)*xf18*xf22 + p*(((-xf23)*xf5 + (-alpha*xf21)*xf9 + (gamma*xf23)*xf16));
+  auto const xf0 = h;
+  auto const xf1 = xf0[2];
+  auto const xf2 = magb*qop;
+  auto const xf3 = s*xf2;
+  auto const xf4 = std::cos(xf3);
+  auto const xf5 = 1 - xf4;
+  auto const xf6 = gamma*xf5;
+  auto const xf7 = T0;
+  auto const xf8 = xf7[2];
+  auto const xf9 = xf4*xf8;
+  auto const xf10 = N0;
+  auto const xf11 = xf10[2];
+  auto const xf12 = std::sin(xf3);
+  auto const xf13 = alpha*xf12;
+  auto const xf14 = xf11*xf13;
+  auto const xf15 = -xf14 + xf9;
+  auto const xf16 = xf1*xf6 + xf15;
+  auto const xf17 = std::pow(qop, -2);
+  auto const xf18 = xf0[0];
+  auto const xf19 = xf7[0];
+  auto const xf20 = xf19*xf4;
+  auto const xf21 = xf10[0];
+  auto const xf22 = xf13*xf21;
+  auto const xf23 = xf20 - xf22;
+  auto const xf24 = xf18*xf6 + xf23;
+  auto const xf25 = xf0[1];
+  auto const xf26 = xf7[1];
+  auto const xf27 = xf26*xf4;
+  auto const xf28 = xf10[1];
+  auto const xf29 = xf13*xf28;
+  auto const xf30 = xf27 - xf29;
+  auto const xf31 = xf25*xf6 + xf30;
+  auto const xf32 = xf17*std::pow(xf24, 2) + xf17*std::pow(xf31, 2);
+  auto const xf33 = xf17/xf32;
+  auto const xf34 = 1.0/(std::pow(xf16, 2)*xf33 + 1);
+  auto const xf35 = qop*s;
+  auto const xf36 = xf12*xf8;
+  auto const xf37 = xf12*xf35;
+  auto const xf38 = gamma*xf1;
+  auto const xf39 = xf35*xf4;
+  auto const xf40 = alpha*xf11;
+  auto const xf41 = 1.0/std::fabs(qop);
+  auto const xf42 = xf41/std::sqrt(xf32);
+  auto const xf43 = xf19*xf37;
+  auto const xf44 = alpha*xf21;
+  auto const xf45 = xf39*xf44;
+  auto const xf46 = gamma*xf37;
+  auto const xf47 = xf18*xf46;
+  auto const xf48 = (1.0/2.0)*xf17;
+  auto const xf49 = xf24*xf48;
+  auto const xf50 = xf26*xf37;
+  auto const xf51 = alpha*xf28;
+  auto const xf52 = xf39*xf51;
+  auto const xf53 = xf25*xf46;
+  auto const xf54 = xf31*xf48;
+  auto const xf55 = xf16*xf41/std::pow(xf32, 3.0/2.0);
+  auto const xf56 = 1.0/magb;
+  auto const xf57 = s*xf56;
+  auto const xf58 = xf4*xf57;
+  auto const xf59 = 1.0/qop;
+  auto const xf60 = xf59/std::pow(magb, 2);
+  auto const xf61 = xf12*xf60;
+  auto const xf62 = xf58 - xf61;
+  auto const xf63 = -gamma*xf58 + gamma*xf61;
+  auto const xf64 = xf60*(-xf12*xf3 + xf5);
+  auto const xf65 = -xf16*(xf1*xf63 + xf40*xf64 + xf62*xf8) - xf24*(xf18*xf63 + xf19*xf62 + xf44*xf64) - xf31*(xf25*xf63 + xf26*xf62 + xf51*xf64);
+  auto const xf66 = xf12*xf2;
+  auto const xf67 = xf2*xf4;
+  auto const xf68 = xf19*xf66;
+  auto const xf69 = xf44*xf67;
+  auto const xf70 = gamma*xf66;
+  auto const xf71 = xf18*xf70;
+  auto const xf72 = xf26*xf66;
+  auto const xf73 = xf51*xf67;
+  auto const xf74 = xf25*xf70;
+  auto const xf75 = xf24*xf33;
+  auto const xf76 = xf31*xf33;
+  auto const xf77 = U;
+  auto const xf78 = xf77[0];
+  auto const xf79 = xf5*xf60;
+  auto const xf80 = gamma*xf18;
+  auto const xf81 = xf60*(xf12 - xf3);
+  auto const xf82 = xf56*xf59;
+  auto const xf83 = xf82*(-xf35 + xf39);
+  auto const xf84 = -xf19*xf61 + xf20*xf57 - xf22*xf57 + xf44*xf79 + xf80*xf81 - xf80*xf83;
+  auto const xf85 = xf77[1];
+  auto const xf86 = gamma*xf25;
+  auto const xf87 = -xf26*xf61 + xf27*xf57 - xf29*xf57 + xf51*xf79 + xf81*xf86 - xf83*xf86;
+  auto const xf88 = xf77[2];
+  auto const xf89 = -xf14*xf57 + xf38*xf81 - xf38*xf83 + xf40*xf79 + xf57*xf9 - xf61*xf8;
+  auto const xf90 = xf82*(-xf2 + xf67);
+  auto const xf91 = xf23 - xf80*xf90;
+  auto const xf92 = xf30 - xf86*xf90;
+  auto const xf93 = xf15 - xf38*xf90;
+  auto const xf94 = V;
+  auto const xf95 = xf94[0];
+  auto const xf96 = xf94[1];
+  auto const xf97 = xf94[2];
+  auto const dlamdB = xf34*xf65*(xf42*(-xf2*xf36 + xf38*xf66 - xf40*xf67) + xf55*(-xf49*(-2*xf68 - 2*xf69 + 2*xf71) - xf54*(-2*xf72 - 2*xf73 + 2*xf74))) + xf34*(xf42*(-xf35*xf36 + xf37*xf38 - xf39*xf40) + xf55*(-xf49*(-2*xf43 - 2*xf45 + 2*xf47) - xf54*(-2*xf50 - 2*xf52 + 2*xf53)));
+  auto const dphidB = xf65*(xf75*(-xf72 - xf73 + xf74) - xf76*(-xf68 - xf69 + xf71)) + xf75*(-xf50 - xf52 + xf53) - xf76*(-xf43 - xf45 + xf47);
+  auto const dxtdB = xf65*(xf78*xf91 + xf85*xf92 + xf88*xf93) + xf78*xf84 + xf85*xf87 + xf88*xf89;
+  auto const dytdB = xf65*(xf91*xf95 + xf92*xf96 + xf93*xf97) + xf84*xf95 + xf87*xf96 + xf89*xf97;
 
-  const Vector3d dMdB = resf0;
-  const Vector3d dPdB = resf1;
-
-  Vector6d dFglobal;
-  dFglobal.head<3>() = dMdB;
-  dFglobal.tail<3>() = dPdB;
-
-  //convert to curvilinear
-  JacobianCartesianToCurvilinear cart2curv(globalDest);
-  const AlgebraicMatrix56& cart2curvjacs = cart2curv.jacobian();
-  const Map<const Matrix<double, 5, 6, RowMajor> > cart2curvjac(cart2curvjacs.Array());
-
-  //compute final jacobian (and convert to Tesla)
-  Matrix<double, 5, 1> dF = 2.99792458e-3*cart2curvjac*dFglobal;
-  //q/p element is exactly 0 by construction
-  dF(0,0) = 0.;
+  Matrix<double, 5, 1> dF;
+  dF[0] = 0.;
+  dF[1] = dlamdB;
+  dF[2] = dphidB;
+  dF[3] = dxtdB;
+  dF[4] = dytdB;
+  
+//   convert to tesla
+  dF *= 2.99792458e-3;
+  
+//   Matrix<double, 5, 1> Fqop;
+//   Fqop[0] = 1.;
+//   Fqop[1] = dlamdqop;
+//   Fqop[2] = dphidqop;
+//   Fqop[3] = dxtdqop;
+//   Fqop[4] = dytdqop;
+// //   
+//   std::cout << "Fqop from sympy:" << std::endl;
+//   std::cout << Fqop << std::endl;
   
   return dF;
 }
@@ -1901,9 +2093,12 @@ std::array<Matrix<double, 5, 5>, 5> ResidualGlobalCorrectionMaker::processNoiseJ
   dQdqop(2,1) = dmsxydqop;
   dQdqop(2,2) = dmsyydqop;
   
+//   std::cout << "dQdqop" << std::endl;
+//   std::cout << dQdqop << std::endl;
+  
 //   Matrix<double, 5, 5> &d2Qdqop2 = res[1];
 //   d2Qdqop2 = Matrix<double, 5, 5>::Zero();
-// //   d2Qdqop2(0,0) = d2elosdqop2;
+//   d2Qdqop2(0,0) = d2elosdqop2;
 //   d2Qdqop2(1,1) = d2msxxdqop2;
 //   d2Qdqop2(1,2) = d2msxydqop2;
 //   d2Qdqop2(2,1) = d2msxydqop2;
