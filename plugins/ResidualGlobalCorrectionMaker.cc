@@ -683,6 +683,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     if (genpart==nullptr) {
 //       continue;
 //     }
+//     if (genpart->pt()>10.) {
+//       continue;
+//     }
 //     if (genpart->pt()<100.) {
 //       continue;
 //     }
@@ -811,9 +814,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
         //compute inverse transport jacobian
         // TODO use intended Bfield value (at propagation source)
-        AnalyticalCurvilinearJacobian curvjac(updtsos.globalParameters(), currentFts.parameters().position(), currentFts.parameters().momentum(), -sm);
+//         AnalyticalCurvilinearJacobian curvjac(updtsos.globalParameters(), currentFts.parameters().position(), currentFts.parameters().momentum(), -sm);
+        AnalyticalCurvilinearJacobian curvjac(currentFts.parameters(), updtsos.globalParameters().position(), updtsos.globalParameters().momentum(), sm);
         const AlgebraicMatrix55 &jacFm = curvjac.jacobian();
-        const Map<const Matrix<double, 5, 5, RowMajor>> Fm(jacFm.Array());
+//         const Map<const Matrix<double, 5, 5, RowMajor>> Fm(jacFm.Array());
+        const Matrix5d Fm = Map<const Matrix<double, 5, 5, RowMajor>>(jacFm.Array()).inverse();
+        
 //         MSJacobian Fm = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).cast<MSScalar>();
 //         const Matrix<double, 5, 1> Fqop = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).col(0);
 //         std::cout << "Fqop from CMSSW" << std::endl;
@@ -885,8 +891,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
         if (iiter==0) {
           //current state from predicted state
-          if (hit->isValid()) {
-//           if (false) {
+//           if (hit->isValid()) {
+          if (false) {
             idx0 = update(updtsos, *preciseHit);
 //             std::cout << "before KF update, ihit " << ihit << std::endl;
 //             std::cout << updtsos.localParameters().vector() << std::endl;
@@ -1011,23 +1017,23 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             // du/dBp
             Matrix<MSScalar, 2, 1> Bp = dFp.segment<2>(3).cast<MSScalar>();
             
-  //           std::cout << "Jm" << std::endl;
-  //           std::cout << Jm << std::endl;
-  //           std::cout << "Sinvm" << std::endl;
-  //           std::cout << Sinvm << std::endl;
-  //           std::cout << "Dm" << std::endl;
-  //           std::cout << Dm << std::endl;
-  //           std::cout << "Bm" << std::endl;
-  //           std::cout << Bm << std::endl;
-  //           
-  //           std::cout << "Jp" << std::endl;
-  //           std::cout << Jp << std::endl;
-  //           std::cout << "Sinvp" << std::endl;
-  //           std::cout << Sinvp << std::endl;
-  //           std::cout << "Dp" << std::endl;
-  //           std::cout << Dp << std::endl;
-  //           std::cout << "Bp" << std::endl;
-  //           std::cout << Bp << std::endl;
+            std::cout << "Jm" << std::endl;
+            std::cout << Jm << std::endl;
+            std::cout << "Sinvm" << std::endl;
+            std::cout << Sinvm << std::endl;
+            std::cout << "Dm" << std::endl;
+            std::cout << Dm << std::endl;
+            std::cout << "Bm" << std::endl;
+            std::cout << Bm << std::endl;
+            
+            std::cout << "Jp" << std::endl;
+            std::cout << Jp << std::endl;
+            std::cout << "Sinvp" << std::endl;
+            std::cout << Sinvp << std::endl;
+            std::cout << "Dp" << std::endl;
+            std::cout << Dp << std::endl;
+            std::cout << "Bp" << std::endl;
+            std::cout << Bp << std::endl;
             
             // energy loss jacobians
   //           const MSJacobian E = EdE.leftCols<5>().cast<MSScalar>();
@@ -1066,21 +1072,23 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             }
   
             // initialize active scalars for correction parameters
-            MSScalar dbeta(0.);
-            init_twice_active_var(dbeta, nlocal, localparmidx);
+//             MSScalar dbeta(0.);
+//             init_twice_active_var(dbeta, nlocal, localparmidx);
             
-            MSScalar dxi(0.);
-            init_twice_active_var(dxi, nlocal, localparmidx + 1);
+//             MSScalar dxi(0.);
+//             init_twice_active_var(dxi, nlocal, localparmidx + 1);
             
-            MSScalar dbetap(0.);
-            init_twice_active_var(dbetap, nlocal, localparmidx + 2);
+//             MSScalar dbetap(0.);
+//             init_twice_active_var(dbetap, nlocal, localparmidx + 2);
             
             //multiple scattering kink term
             
             const Matrix<MSScalar, 2, 1> dalpha0 = dx0.segment<2>(1).cast<MSScalar>();
             
-            const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
-            const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop - Bp*dbetap);
+//             const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
+//             const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop - Bp*dbetap);
+            const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm);
+            const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop);
             
             const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
             const MSScalar chisqms = dms.transpose()*Qinvms*dms;
@@ -1089,7 +1097,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             //energy loss term
             const MSScalar deloss0(dx0[0]);
             
-            const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+//             const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+            const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0];
             const MSScalar chisqeloss = deloss*deloss*invSigmaE;
 //             (void)chisqeloss;
             
