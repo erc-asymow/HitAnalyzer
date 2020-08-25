@@ -38,10 +38,10 @@
 #include "Geometry/Records/interface/GlobalTrackingGeometryRecord.h"
 #include "DataFormats/SiPixelDetId/interface/PXFDetId.h"
 #include "DataFormats/SiPixelDetId/interface/PXBDetId.h"
-#include "DataFormats/SiStripDetId/interface/TIDDetId.h"
-#include "DataFormats/SiStripDetId/interface/TIBDetId.h"
-#include "DataFormats/SiStripDetId/interface/TOBDetId.h"
-#include "DataFormats/SiStripDetId/interface/TECDetId.h"
+// #include "DataFormats/SiStripDetId/interface/TIDDetId.h"
+// #include "DataFormats/SiStripDetId/interface/TIBDetId.h"
+// #include "DataFormats/SiStripDetId/interface/TOBDetId.h"
+// #include "DataFormats/SiStripDetId/interface/TECDetId.h"
 #include "DataFormats/GeometryCommonDetAlgo/interface/MeasurementPoint.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticle.h"
 #include "Geometry/CommonTopologies/interface/StripTopology.h"
@@ -492,8 +492,9 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::TIB)
       {
-        TIBDetId detid(tms[i].recHit()->rawId());
-        layer.push_back(detid.layer());
+        SiStripDetId detid(tms[i].recHit()->rawId());
+//         TIBDetId detid(tms[i].recHit()->rawId());
+        layer.push_back(0);
         if (detid.stereo() != 0)
           stereo.push_back(1);
         if (detid.glued() != 0)
@@ -501,8 +502,10 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::TOB)
       {
-        TOBDetId detid(tms[i].recHit()->rawId());
-        layer.push_back(detid.layer());
+        SiStripDetId detid(tms[i].recHit()->rawId());
+//         TOBDetId detid(tms[i].recHit()->rawId());
+//         layer.push_back(detid.layer());
+        layer.push_back(0);
         if (detid.stereo() != 0)
           stereo.push_back(1);
         if (detid.glued() != 0)
@@ -510,8 +513,10 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::TID)
       {
-        TIDDetId detid(tms[i].recHit()->rawId());
-        layer.push_back(-1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel());
+        SiStripDetId detid(tms[i].recHit()->rawId());
+//         TIDDetId detid(tms[i].recHit()->rawId());
+//         layer.push_back(-1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel());
+        layer.push_back(0);
         if (detid.stereo() != 0)
           stereo.push_back(1);
         if (detid.glued() != 0)
@@ -519,8 +524,10 @@ void HitAnalyzer::analyze(const edm::Event &iEvent, const edm::EventSetup &iSetu
       }
       else if (detectorG->subDetector() == GeomDetEnumerators::TEC)
       {
-        TECDetId detid(tms[i].recHit()->rawId());
-        layer.push_back(-1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel());
+        SiStripDetId detid(tms[i].recHit()->rawId());
+//         TECDetId detid(tms[i].recHit()->rawId());
+//         layer.push_back(-1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel());
+        layer.push_back(0);
         if (detid.stereo() != 0)
           stereo.push_back(1);
         if (detid.glued() != 0)
