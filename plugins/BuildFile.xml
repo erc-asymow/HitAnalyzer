@@ -1,3 +1,4 @@
+<Flags CXXFLAGS="-g"/>
 <use name="FWCore/Framework"/>
 <use name="FWCore/PluginManager"/>
 <use name="FWCore/ParameterSet"/>
@@ -29,6 +30,7 @@
 <use name="TrackingTools/KalmanUpdators"/>
 <use name="Utilities/General"/>
 <use name="TrackPropagation/RungeKutta"/>
+<use name="CommonTools/UtilAlgos"/>
 
 <export>
   <lib name="1"/>
