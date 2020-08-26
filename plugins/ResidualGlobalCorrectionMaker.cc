@@ -161,9 +161,14 @@ private:
   //virtual void beginLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
   //virtual void endLuminosityBlock(edm::LuminosityBlock const&, edm::EventSetup const&) override;
 
+  Matrix<double, 5, 6> localTransportJacobian(const TrajectoryStateOnSurface &start,
+                                              const std::pair<TrajectoryStateOnSurface, double> &propresult,
+                                              bool doReverse = false) const;
+  
   Matrix<double, 5, 1> bfieldJacobian(const GlobalTrajectoryParameters& globalSource,
                                                              const GlobalTrajectoryParameters& globalDest,
-                                                             const double& s) const;
+                                                             const double& s,
+                                                             const GlobalVector& bfield) const;
                                                              
   Matrix<double, 5, 6> materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
   
@@ -706,7 +711,6 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     
     FreeTrajectoryState refFts;
-    FreeTrajectoryState currentFts;
     
     if (dogen) {
       //init from gen state
@@ -735,14 +739,41 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       refFts = FreeTrajectoryState(refglobal, referr);
     }
 
+//     std::vector<std::pair<TrajectoryStateOnSurface, double>> layerStates;
     std::vector<TrajectoryStateOnSurface> layerStates;
     layerStates.reserve(nhits);
     
-    //inflate errors
-    refFts.rescaleError(100.);
-    
-    
     bool valid = true;
+
+    
+//     //do propagation and prepare states
+//     auto propresult = fPropagator->propagateWithPath(refFts, *hits.front()->surface());
+//     if (!propresult.first.isValid()) {
+//       std::cout << "Abort: Propagation from reference point failed" << std::endl;
+//       continue;
+//     }
+//     layerStates.push_back(propresult);
+//     
+//     for (auto const& hit : hits) {
+//       propresult = fPropagator->propagateWithPath(layerStates.back().first, *hit->surface());
+//       if (!propresult.first.isValid()) {
+//         std::cout << "Abort: Propagation failed" << std::endl;
+//         valid = false;
+//         break;
+//       }
+//       layerStates.push_back(propresult);
+//     }
+//     
+//     if (!valid) {
+//       continue;
+//     }
+    
+
+    
+    //inflate errors
+//     refFts.rescaleError(100.);
+    
+    
 //     unsigned int ntotalhitdim = 0;
 //     unsigned int alignmentidx = 0;
 //     unsigned int bfieldidx = 0;
@@ -778,13 +809,16 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         std::cout << "after update: reffts:" << std::endl;
 //         std::cout << refFts.parameters().vector() << std::endl;
 //         std::cout << "charge " << refFts.charge() << std::endl;
-        currentFts = refFts;
+//         currentFts = refFts;
       }
       
-      Matrix5d Hlm = Matrix5d::Identity();
-      currentFts = refFts;
+//       Matrix5d Hlm = Matrix5d::Identity();
+//       currentFts = refFts;
+//       TrajectoryStateOnSurface currentTsos;
+
+      Matrix<double, 5, 6> FdFm;
       
-      auto propresult = fPropagator->geometricalPropagator().propagateWithPath(currentFts, *hits[0]->surface());
+      auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *hits[0]->surface());
       if (!propresult.first.isValid()) {
         std::cout << "Abort: Propagation of reference state Failed!" << std::endl;
         valid = false;
@@ -793,47 +827,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
 //         std::cout << "ihit " << ihit << std::endl;
-        
-//         auto const& inhit = *(hitsbegin + ihit);
-        //TODO check for null geographicalId?
-//         const GeomDet *detectorG = globalGeometry->idToDet(inhit->geographicalId());
-//         auto const& hit = inhit->cloneForFit(*detectorG);
-  //       const TransientTrackingRecHit hit = *inhit->cloneForFit(*detectorG);
-        
         auto const& hit = hits[ihit];
         
-        TrajectoryStateOnSurface& updtsos = propresult.first;
-        double sm = propresult.second;
-        
-        // inverse jacobian for propagated state (before material effects)
-        JacobianLocalToCurvilinear hcm(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
-        const AlgebraicMatrix55 &jachcm = hcm.jacobian();
-        //efficient assignment from SMatrix using Eigen::Map
-        const Map<const Matrix<double, 5, 5, RowMajor>> Hcm(jachcm.Array());
-//         MSJacobian Hm = jachpropeig.cast<MSScalar>();
-        
-        //compute inverse transport jacobian
-        // TODO use intended Bfield value (at propagation source)
-//         AnalyticalCurvilinearJacobian curvjac(updtsos.globalParameters(), currentFts.parameters().position(), currentFts.parameters().momentum(), -sm);
-        AnalyticalCurvilinearJacobian curvjac(currentFts.parameters(), updtsos.globalParameters().position(), updtsos.globalParameters().momentum(), sm);
-        const AlgebraicMatrix55 &jacFm = curvjac.jacobian();
-//         const Map<const Matrix<double, 5, 5, RowMajor>> Fm(jacFm.Array());
-        const Matrix5d Fm = Map<const Matrix<double, 5, 5, RowMajor>>(jacFm.Array()).inverse();
-        
-//         MSJacobian Fm = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).cast<MSScalar>();
-//         const Matrix<double, 5, 1> Fqop = Map<const Matrix<double, 5, 5, RowMajor> >(jacF.Array()).col(0);
-//         std::cout << "Fqop from CMSSW" << std::endl;
-//         std::cout << Fqop << std::endl;
-        
-        // inverse bfield jacobian
-        const Vector5d dFm = bfieldJacobian(updtsos.globalParameters(), currentFts.parameters(), -sm);
-//         const MSVector dF = bfieldJacobian(currentFts.parameters(), updtsos.globalParameters(), s).cast<MSScalar>();
-        
+        TrajectoryStateOnSurface updtsos = propresult.first;
+         
         //energy loss jacobian
         const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
-//         const MSJacobian E = EdE.leftCols<5>().cast<MSScalar>();
-//         const MSVector dE = EdE.rightCols<1>().cast<MSScalar>();
-        
+       
         //process noise jacobians
 //         const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
         
@@ -854,6 +854,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           break;
         }
         
+        const AlgebraicVector5 dxeloss = tmptsos.localParameters().vector() - updtsos.localParameters().vector();
+        
         ok = fPropagator->materialEffectsUpdator().updateStateInPlace(updtsos, alongMomentum);
         if (!ok) {
           std::cout << "Abort: material update failed" << std::endl;
@@ -864,17 +866,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         //get the process noise matrix
         AlgebraicMatrix55 const Qmat = tmptsos.localError().matrix();
         const Map<const Matrix<double, 5, 5, RowMajor>>Q(Qmat.Array());
-        std::cout<< "Q" << std::endl;
-        std::cout<< Q << std::endl;
-//         MSCovariance Qinv = MSCovariance::Zero();
-        //Q is 3x3 in the upper left block because there is no displacement on thin scattering layers
-        //so invert the upper 3x3 block
-//         Qinv.topLeftCorner<3,3>() = iQ.topLeftCorner<3,3>().inverse().cast<MSScalar>();
-        
-        //zero displacement on thin scattering layer approximated with small uncertainty
-//         const double epsxy = 1e-5; //0.1um
-//         Qinv(3,3) = MSScalar(1./epsxy/epsxy);
-//         Qinv(4,4) = MSScalar(1./epsxy/epsxy);
+//         std::cout<< "Q" << std::endl;
+//         std::cout<< Q << std::endl;
         
         //apply measurement update if applicable
         auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
@@ -883,71 +876,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           valid = false;
           break;
         }
-        //momentum kink residual
-        //TODO rework code so this can be computed together with the update without loss of precision
-  //       const AlgebraicVector5 idx0 = hit->isValid() ? update(updtsos, *preciseHit) : AlgebraicVector5(0., 0., 0., 0., 0.);
-  //       updtsos = hit->isValid() ? updator.update(updtsos, *preciseHit) : updtsos;
 
+        //momentum kink residual
         AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
-        if (iiter==0) {
-          //current state from predicted state
-//           if (hit->isValid()) {
-          if (false) {
-            idx0 = update(updtsos, *preciseHit);
-//             std::cout << "before KF update, ihit " << ihit << std::endl;
-//             std::cout << updtsos.localParameters().vector() << std::endl;
-            updtsos = updator.update(updtsos, *preciseHit);
-            if (!updtsos.isValid()) {
-              std::cout << "Abort: Kalman filter update failed" << std::endl;
-              valid = false;
-              break;
-            }
-//             std::cout << "after KF update" << std::endl;
-//             std::cout << updtsos.localParameters().vector() << std::endl;
-          }
-          layerStates.push_back(updtsos);
-        }
-        else {
-          //current state from previous state on this layer
-          //save current parameters          
-          TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
-          JacobianCurvilinearToLocal curv2local(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
-          const AlgebraicMatrix55& jac = curv2local.jacobian();
-          const AlgebraicVector5 local = oldtsos.localParameters().vector();
-          auto const& dxlocal = dxfull.segment<5>(5*(ihit+1));
-          const Matrix<double, 5, 1> localupd = Map<const Matrix<double, 5, 1>>(local.Array()) + Map<const Matrix<double, 5, 5, RowMajor>>(jac.Array())*dxlocal;
-          AlgebraicVector5 localvecupd(localupd[0],localupd[1],localupd[2],localupd[3],localupd[4]);
-          
-          idx0 = localvecupd - updtsos.localParameters().vector();
-          
-          const LocalTrajectoryParameters localparms(localvecupd, oldtsos.localParameters().pzSign());
-          
-//           std::cout << "before update: oldtsos:" << std::endl;
-//           std::cout << oldtsos.localParameters().vector() << std::endl;
-          oldtsos.update(localparms, oldtsos.surface(), field, oldtsos.surfaceSide());
-//           std::cout << "after update: oldtsos:" << std::endl;
-//           std::cout << oldtsos.localParameters().vector() << std::endl;
-          updtsos = oldtsos;
-        }
-        
-        currentFts = *updtsos.freeState();
-        
-        Vector5d dx0 = Map<const Vector5d>(idx0.Array());
-//         MSVector dx0 = Map<const Vector5d>(idx0.Array()).cast<MSScalar>();
-        
-        //jacobian for updated state
-//         JacobianCurvilinearToLocal h(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
-//         const AlgebraicMatrix55 &jach = h.jacobian();
-        //efficient assignment from SMatrix using Eigen::Map
-//         Map<const Matrix<double, 5, 5, RowMajor> > jacheig(jach.Array());
-  //       Hh.block<2,5>(2*i, 5*i) = jacheig.bottomRows<2>();
-  //       StateJacobian H = jacheig.cast<AAdouble>();
+        const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
         
         if (ihit < (nhits-1)) {
-          // inverse jacobian for state to be propagated forward
-          JacobianLocalToCurvilinear hcp(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
-          const AlgebraicMatrix55& jachcp = hcp.jacobian();
-          const Map<const Matrix<double, 5, 5, RowMajor>> Hcp(jachcp.Array());
           
           propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
           if (!propresult.first.isValid()) {
@@ -955,27 +889,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             valid = false;
             break;
           }
+          
           if (ihit>0) {
+//           if (false) {
+            //forward propagation jacobian (local to local)
+            const Matrix<double, 5, 6> FdFp = localTransportJacobian(updtsos, propresult, false);
 
+//             std::cout << "FdFm" << std::endl;
+//             std::cout << FdFm << std::endl;
+//             std::cout << "FdFp" << std::endl;
+//             std::cout << FdFp << std::endl;
             
-            const TrajectoryStateOnSurface& proptsos = propresult.first;
-            double sp = propresult.second;
-            
-
-            
-            // jacobian for forward propagated state
-            JacobianCurvilinearToLocal hlp(proptsos.surface(), proptsos.localParameters(), *proptsos.magneticField());
-            const AlgebraicMatrix55& jachlp = hlp.jacobian();
-            const Map<const Matrix<double, 5, 5, RowMajor>> Hlp(jachlp.Array());
-
-            // transport jacobian for forward propagation
-            AnalyticalCurvilinearJacobian curvjac(updtsos.globalParameters(), proptsos.globalParameters().position(), proptsos.globalParameters().momentum(), sp);
-            const AlgebraicMatrix55 &jacFp = curvjac.jacobian();
-            const Map<const Matrix<double, 5, 5, RowMajor>> Fp(jacFp.Array());
-            
-            // bfield jacobian for forward propagation
-            const Vector5d dFp = bfieldJacobian(updtsos.globalParameters(), proptsos.globalParameters(), sp);
-                      
             constexpr unsigned int nlocalstate = 8;
             constexpr unsigned int nlocalbfield = 2;
             constexpr unsigned int nlocaleloss = 1;
@@ -991,49 +915,44 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   //           const unsigned int fullstateidx = 3*ihit;
             const unsigned int fullstateidx = 3*(ihit-1);
             const unsigned int fullparmidx = nstateparms + parmidx;
-            
-            // composed jacobian for backwards propagation
-            const Matrix5d Flm = Hlm*Fm*Hcm;
-            // composed jacobian for forwards propagation
-            const Matrix5d Flp = Hlp*Fp*Hcp;
-            
+             
             // individual pieces, now starting to cast to active scalars for autograd,
             // as in eq (3) of https://doi.org/10.1016/j.cpc.2011.03.017
             // du/dum
-            Matrix<MSScalar, 2, 2> Jm = Flm.block<2, 2>(3, 3).cast<MSScalar>();
+            Matrix<MSScalar, 2, 2> Jm = FdFm.block<2, 2>(3, 3).cast<MSScalar>();
             // (du/dalpham)^-1
-            Matrix<MSScalar, 2, 2> Sinvm = Flm.block<2, 2>(3, 1).inverse().cast<MSScalar>();
+            Matrix<MSScalar, 2, 2> Sinvm = FdFm.block<2, 2>(3, 1).inverse().cast<MSScalar>();
             // du/dqopm
-            Matrix<MSScalar, 2, 1> Dm = Flm.block<2, 1>(3, 0).cast<MSScalar>();
+            Matrix<MSScalar, 2, 1> Dm = FdFm.block<2, 1>(3, 0).cast<MSScalar>();
             // du/dBm
-            Matrix<MSScalar, 2, 1> Bm = dFm.segment<2>(3).cast<MSScalar>();
+            Matrix<MSScalar, 2, 1> Bm = FdFm.block<2, 1>(3, 5).cast<MSScalar>();
 
             // du/dup
-            Matrix<MSScalar, 2, 2> Jp = Flp.block<2, 2>(3, 3).cast<MSScalar>();
+            Matrix<MSScalar, 2, 2> Jp = FdFp.block<2, 2>(3, 3).cast<MSScalar>();
             // (du/dalphap)^-1
-            Matrix<MSScalar, 2, 2> Sinvp = Flp.block<2, 2>(3, 1).inverse().cast<MSScalar>();
+            Matrix<MSScalar, 2, 2> Sinvp = FdFp.block<2, 2>(3, 1).inverse().cast<MSScalar>();
             // du/dqopp
-            Matrix<MSScalar, 2, 1> Dp = Flp.block<2, 1>(3, 0).cast<MSScalar>();
+            Matrix<MSScalar, 2, 1> Dp = FdFp.block<2, 1>(3, 0).cast<MSScalar>();
             // du/dBp
-            Matrix<MSScalar, 2, 1> Bp = dFp.segment<2>(3).cast<MSScalar>();
+            Matrix<MSScalar, 2, 1> Bp = FdFp.block<2, 1>(3, 5).cast<MSScalar>();
             
-            std::cout << "Jm" << std::endl;
-            std::cout << Jm << std::endl;
-            std::cout << "Sinvm" << std::endl;
-            std::cout << Sinvm << std::endl;
-            std::cout << "Dm" << std::endl;
-            std::cout << Dm << std::endl;
-            std::cout << "Bm" << std::endl;
-            std::cout << Bm << std::endl;
-            
-            std::cout << "Jp" << std::endl;
-            std::cout << Jp << std::endl;
-            std::cout << "Sinvp" << std::endl;
-            std::cout << Sinvp << std::endl;
-            std::cout << "Dp" << std::endl;
-            std::cout << Dp << std::endl;
-            std::cout << "Bp" << std::endl;
-            std::cout << Bp << std::endl;
+//             std::cout << "Jm" << std::endl;
+//             std::cout << Jm << std::endl;
+//             std::cout << "Sinvm" << std::endl;
+//             std::cout << Sinvm << std::endl;
+//             std::cout << "Dm" << std::endl;
+//             std::cout << Dm << std::endl;
+//             std::cout << "Bm" << std::endl;
+//             std::cout << Bm << std::endl;
+//             
+//             std::cout << "Jp" << std::endl;
+//             std::cout << Jp << std::endl;
+//             std::cout << "Sinvp" << std::endl;
+//             std::cout << Sinvp << std::endl;
+//             std::cout << "Dp" << std::endl;
+//             std::cout << Dp << std::endl;
+//             std::cout << "Bp" << std::endl;
+//             std::cout << Bp << std::endl;
             
             // energy loss jacobians
   //           const MSJacobian E = EdE.leftCols<5>().cast<MSScalar>();
@@ -1042,6 +961,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             const MSScalar Eqop(EdE(0,0));
             const Matrix<MSScalar, 1, 2> Ealpha = EdE.block<1, 2>(0, 1).cast<MSScalar>();
             const MSScalar dE(EdE(0,5));
+//             (void)EdE;
+            
+            const MSScalar muE(dxeloss[0]);
+            
+//             std::cout<<"EdE" << std::endl;
+//             std::cout << EdE << std::endl;
             
             //energy loss inverse variance
             MSScalar invSigmaE(1./Q(0,0));
@@ -1072,33 +997,38 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             }
   
             // initialize active scalars for correction parameters
-//             MSScalar dbeta(0.);
-//             init_twice_active_var(dbeta, nlocal, localparmidx);
+            MSScalar dbeta(0.);
+            init_twice_active_var(dbeta, nlocal, localparmidx);
             
-//             MSScalar dxi(0.);
-//             init_twice_active_var(dxi, nlocal, localparmidx + 1);
+            MSScalar dxi(0.);
+            init_twice_active_var(dxi, nlocal, localparmidx + 1);
             
-//             MSScalar dbetap(0.);
-//             init_twice_active_var(dbetap, nlocal, localparmidx + 2);
+            MSScalar dbetap(0.);
+            init_twice_active_var(dbetap, nlocal, localparmidx + 2);
             
             //multiple scattering kink term
             
             const Matrix<MSScalar, 2, 1> dalpha0 = dx0.segment<2>(1).cast<MSScalar>();
             
-//             const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
-//             const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop - Bp*dbetap);
-            const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm);
-            const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop);
+            const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
+            const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop - Bp*dbetap);
+//             const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm);
+//             const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop);
             
             const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
+//             const Matrix<MSScalar, 2, 1> dms = dalphap - dalpham;
             const MSScalar chisqms = dms.transpose()*Qinvms*dms;
 //             (void)chisqms;
             
             //energy loss term
-            const MSScalar deloss0(dx0[0]);
+//             const MSScalar deloss0(dx0[0]);
+            const MSScalar deloss0(dxeloss[0]);
             
-//             const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
-            const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0];
+            
+            const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+//             const MSScalar deloss = dqop - dqopm;
+//             const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0];
+//             const MSScalar deloss = deloss0 + dqop - Eqop*dqopm;
             const MSScalar chisqeloss = deloss*deloss*invSigmaE;
 //             (void)chisqeloss;
             
@@ -1216,18 +1146,16 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             globalidxv[parmidx] = elossglobalidx;
             parmidx++;
           }
-          
-          
-          // jacobian for state to be propagated forward (needed for next layer)
-          JacobianCurvilinearToLocal hlm(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
-          const AlgebraicMatrix55& jachlm = hlm.jacobian();
-          Hlm = Map<const Matrix<double, 5, 5, RowMajor>>(jachlm.Array());
+                    
+          //backwards propagation jacobian (local to local) to be used at the next layer
+          FdFm = localTransportJacobian(updtsos, propresult, true);
           
         }
         
         //hit information
         //FIXME consolidate this special cases into templated function(s)
         if (preciseHit->isValid()) {
+//         if (false) {
           constexpr unsigned int nlocalstate = 2;
           constexpr unsigned int localstateidx = 0;
           constexpr unsigned int localalignmentidx = nlocalstate;
@@ -1244,6 +1172,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             const StripHitScalar dy0(preciseHit->localPosition().x() - updtsos.localPosition().x());
             const StripHitScalar Vinv(1./preciseHit->localPositionError().xx());
+            
+//             std::cout << "dy0" << std::endl;
+//             std::cout << dy0 << std::endl;
             
             StripHitVector dx = StripHitVector::Zero();
             for (unsigned int j=0; j<dx.size(); ++j) {
@@ -1298,6 +1229,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               dy0[0] = PixelHit2DScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
               dy0[1] = PixelHit2DScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
               
+//               std::cout << "dy0 (pixel hit)" << std::endl;
+//               std::cout << dy0 << std::endl;
+//               std::cout << "hit surface global" << std::endl;
+//               std::cout << hit->surface()->toGlobal(LocalPoint(0.,0.)) << std::endl;
+//               std::cout << "updtsos surface global" << std::endl;
+//               std::cout << updtsos.surface().toGlobal(LocalPoint(0.,0.)) << std::endl;
+              
               const PixelHit2DCovariance Vinv = iV.inverse().cast<PixelHit2DScalar>();
               
               PixelHit2DVector dx = PixelHit2DVector::Zero();
@@ -1347,6 +1285,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               StripHitVector dy0;
               dy0[0] = StripHitScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
               dy0[1] = StripHitScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
+              
+//               std::cout << "dy0" << std::endl;
+//               std::cout << dy0 << std::endl;
               
               const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
               
@@ -1410,16 +1351,16 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
       auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
       
-      std::cout << "dchisqdx" << std::endl;
-      std::cout << dchisqdx << std::endl;
-      std::cout << "d2chisqdx2 diagonal" << std::endl;
-      std::cout << d2chisqdx2.diagonal() << std::endl;
-      std::cout << "d2chisqdx2" << std::endl;
-      std::cout << d2chisqdx2 << std::endl;
-      
-  //     auto const& eigenvalues = d2chisqdx2.eigenvalues();
-  //     std::cout << "d2chisqdx2 eigenvalues" << std::endl;
-  //     std::cout << eigenvalues << std::endl;
+//       std::cout << "dchisqdx" << std::endl;
+//       std::cout << dchisqdx << std::endl;
+//       std::cout << "d2chisqdx2 diagonal" << std::endl;
+//       std::cout << d2chisqdx2.diagonal() << std::endl;
+//       std::cout << "d2chisqdx2" << std::endl;
+//       std::cout << d2chisqdx2 << std::endl;
+//       
+//       auto const& eigenvalues = d2chisqdx2.eigenvalues();
+//       std::cout << "d2chisqdx2 eigenvalues" << std::endl;
+//       std::cout << eigenvalues << std::endl;
       
 //       auto const& Cinvd = d2chisqdx2.ldlt();
       Cinvd.compute(d2chisqdx2);
@@ -1435,10 +1376,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //       grad = dchisqdparms + dxdparms*dchisqdx;
 //       hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
 //       
-      std::cout << "dxfull" << std::endl;
-      std::cout << dxfull << std::endl;
-      std::cout << "errsq" << std::endl;
-      std::cout << Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).diagonal() << std::endl;
+//       std::cout << "dxfull" << std::endl;
+//       std::cout << dxfull << std::endl;
+//       std::cout << "errsq" << std::endl;
+//       std::cout << Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).diagonal() << std::endl;
       
       const Vector5d dxRef = dxfull.head<5>();
       const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
@@ -1849,14 +1790,15 @@ void ResidualGlobalCorrectionMaker::fillDescriptions(edm::ConfigurationDescripti
 
 Matrix<double, 5, 1> ResidualGlobalCorrectionMaker::bfieldJacobian(const GlobalTrajectoryParameters& globalSource,
                                                              const GlobalTrajectoryParameters& globalDest,
-                                                             const double& s) const {
+                                                             const double& s,
+                                                             const GlobalVector& bfield) const {
  
   //analytic jacobian wrt magnitude of magnetic field
   //TODO should we parameterize with respect to z-component instead?
   //extending derivation from CMS NOTE 2006/001
-  const Vector3d b(globalSource.magneticFieldInInverseGeV().x(),
-                      globalSource.magneticFieldInInverseGeV().y(),
-                      globalSource.magneticFieldInInverseGeV().z());
+  const Vector3d b(bfield.x(),
+                      bfield.y(),
+                      bfield.z());
   const double magb = b.norm();
   const Vector3d h = b.normalized();
 
@@ -2008,6 +1950,41 @@ Matrix<double, 5, 1> ResidualGlobalCorrectionMaker::bfieldJacobian(const GlobalT
 //   std::cout << Fqop << std::endl;
   
   return dF;
+}
+
+Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::localTransportJacobian(const TrajectoryStateOnSurface &start,
+                                            const std::pair<TrajectoryStateOnSurface, double> &propresult,
+                                            bool doReverse) const {
+  
+  const TrajectoryStateOnSurface& state0 = doReverse ? propresult.first : start;
+  const TrajectoryStateOnSurface& state1 = doReverse ? start : propresult.first;
+  const GlobalVector& h = start.globalParameters().magneticFieldInInverseGeV();
+  const double s = doReverse ? -propresult.second : propresult.second;
+  
+  // compute local to curvilinear jacobian at source
+  JacobianLocalToCurvilinear local2curv(state0.surface(), state0.localParameters(), *state0.magneticField());
+  const AlgebraicMatrix55& local2curvjac = local2curv.jacobian();
+  const Matrix<double, 5, 5> H0 = Map<const Matrix<double, 5, 5, RowMajor>>(local2curvjac.Array());
+  
+  // compute curvilinear to local jacobian at destination
+  JacobianCurvilinearToLocal curv2local(state1.surface(), state1.localParameters(), *state1.magneticField());
+  const AlgebraicMatrix55& curv2localjac = curv2local.jacobian();
+  const Matrix<double, 5, 5> H1 = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjac.Array());
+  
+  // compute transport jacobian wrt curvlinear parameters
+  AnalyticalCurvilinearJacobian curv2curv;
+  curv2curv.computeFullJacobian(state0.globalParameters(), state1.globalParameters().position(), state1.globalParameters().momentum(), h, s);
+  const AlgebraicMatrix55& curv2curvjac = curv2curv.jacobian();
+  const Matrix<double, 5, 5> F = Map<const Matrix<double, 5, 5, RowMajor>>(curv2curvjac.Array());
+  
+  // compute transport jacobian wrt B field (magnitude)
+  const Matrix<double, 5, 1> dF = bfieldJacobian(state0.globalParameters(), state1.globalParameters(), s, h);
+  
+  Matrix<double, 5, 6> res;
+  res.leftCols<5>() = H1*F*H0;
+  res.rightCols<1>() = H1*dF;
+  return res;
+                                              
 }
 
 Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) {
