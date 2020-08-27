@@ -787,8 +787,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     unsigned int bfieldidx = 0;
 //     unsigned int elossidx = 0;
     
-    constexpr unsigned int niters = 4;
-//     constexpr unsigned int niters = 1;
+//     constexpr unsigned int niters = 4;
+    constexpr unsigned int niters = 1;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
 //       std::cout<< "iter " << iiter << std::endl;
@@ -871,7 +871,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
        
         //process noise jacobians
-        const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
+//         const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
         
         //TODO update code to allow doing this in one step with nominal update
         //temporary tsos to extract process noise without loss of precision
@@ -1107,59 +1107,59 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             const MSScalar deloss0(dx0[0]);
 
             
-//             const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
-//             const MSScalar chisqms = dms.transpose()*Qinvms*dms;
-//             //energy loss term
-//             
-//             
-//             const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
-//             const MSScalar chisqeloss = deloss*deloss*invSigmaE;
-//             
-//             const MSScalar chisq = chisqms + chisqeloss;
+            const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
+            const MSScalar chisqms = dms.transpose()*Qinvms*dms;
+            //energy loss term
             
-            const bool dolikelihood = false;
-          
-            MSScalar chisq;
             
-            if (true) {
-              //standard chisquared contribution
-              
-              const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
-              const MSScalar chisqms = dms.transpose()*Qinvms*dms;
-              //energy loss term
-              
-              
-              const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
-              const MSScalar chisqeloss = deloss*deloss*invSigmaE;
-              
-              chisq = chisqms + chisqeloss;
-            }
-            else {
-              //maximum likelihood contribution 
-              const MSCovariance dQdqop = dQs[0].cast<MSScalar>();
-              const MSCovariance dQddxdz = dQs[1].cast<MSScalar>();
-              const MSCovariance dQddydz = dQs[2].cast<MSScalar>();
-              const MSCovariance dQdxi = dQs[3].cast<MSScalar>();
-              
-              const MSCovariance dQ = dqopm*dQdqop + dalpham[0]*dQddxdz + dalpham[1]*dQddydz + dxi*dQdxi;
-//               const MSCovariance dQ = 0.5*(dqop+dqopm)*dQdqop + 0.5*(dalpham[0] + dalphap[0])*dQddxdz + 0.5*(dalpham[1]+dalphap[1])*dQddydz + dxi*dQdxi;
-              const Matrix<MSScalar, 2, 2> Qms = Q.block<2,2>(1,1).cast<MSScalar>() + dQ.block<2,2>(1,1);
-              const MSScalar logdetQms = Eigen::log(Qms.determinant());
-              
-              const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
-              MSScalar chisqms = dms.transpose()*Qms.inverse()*dms;
-              chisqms = chisqms + logdetQms;
-              
-              //energy loss term
-              const MSScalar sigmaE = MSScalar(Q(0,0)) + dQ(0,0);
-              const MSScalar logsigmaE = Eigen::log(sigmaE);
-              
-              const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
-              MSScalar chisqeloss = deloss*deloss/sigmaE;
-              chisqeloss = chisqeloss + logsigmaE;
-              
-              chisq = chisqms + chisqeloss;
-            }
+            const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+            const MSScalar chisqeloss = deloss*deloss*invSigmaE;
+            
+            const MSScalar chisq = chisqms + chisqeloss;
+            
+//             const bool dolikelihood = false;
+//           
+//             MSScalar chisq;
+//             
+//             if (true) {
+//               //standard chisquared contribution
+//               
+//               const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
+//               const MSScalar chisqms = dms.transpose()*Qinvms*dms;
+//               //energy loss term
+//               
+//               
+//               const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+//               const MSScalar chisqeloss = deloss*deloss*invSigmaE;
+//               
+//               chisq = chisqms + chisqeloss;
+//             }
+//             else {
+//               //maximum likelihood contribution 
+//               const MSCovariance dQdqop = dQs[0].cast<MSScalar>();
+//               const MSCovariance dQddxdz = dQs[1].cast<MSScalar>();
+//               const MSCovariance dQddydz = dQs[2].cast<MSScalar>();
+//               const MSCovariance dQdxi = dQs[3].cast<MSScalar>();
+//               
+//               const MSCovariance dQ = dqopm*dQdqop + dalpham[0]*dQddxdz + dalpham[1]*dQddydz + dxi*dQdxi;
+// //               const MSCovariance dQ = 0.5*(dqop+dqopm)*dQdqop + 0.5*(dalpham[0] + dalphap[0])*dQddxdz + 0.5*(dalpham[1]+dalphap[1])*dQddydz + dxi*dQdxi;
+//               const Matrix<MSScalar, 2, 2> Qms = Q.block<2,2>(1,1).cast<MSScalar>() + dQ.block<2,2>(1,1);
+//               const MSScalar logdetQms = Eigen::log(Qms.determinant());
+//               
+//               const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
+//               MSScalar chisqms = dms.transpose()*Qms.inverse()*dms;
+//               chisqms = chisqms + logdetQms;
+//               
+//               //energy loss term
+//               const MSScalar sigmaE = MSScalar(Q(0,0)) + dQ(0,0);
+//               const MSScalar logsigmaE = Eigen::log(sigmaE);
+//               
+//               const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+//               MSScalar chisqeloss = deloss*deloss/sigmaE;
+//               chisqeloss = chisqeloss + logsigmaE;
+//               
+//               chisq = chisqms + chisqeloss;
+//             }
             
           
             
