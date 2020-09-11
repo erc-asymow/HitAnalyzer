@@ -270,6 +270,8 @@ private:
   bool fitFromGenParms_;
   bool fillTrackTree_;
   
+  bool debugprintout_;
+  
 };
 
 //
@@ -297,6 +299,8 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
+  
+  debugprintout_ = false;
 
 
 //   fout = new TFile("trackTreeGrads.root", "RECREATE");
@@ -400,15 +404,18 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
   
-  ESHandle<MagneticField> magfield;
-  iSetup.get<IdealMagneticFieldRecord>().get(magfield);
-  auto field = magfield.product();
+//   ESHandle<MagneticField> magfield;
+//   iSetup.get<IdealMagneticFieldRecord>().get(magfield);
+//   auto field = magfield.product();
   
   edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
   iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
   
   ESHandle<Propagator> thePropagator;
-  iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
+//   iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
+  iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", thePropagator);
+//   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterialParabolicMf", thePropagator);
+  const MagneticField* field = thePropagator->magneticField();
   
   
 //   Handle<TrajTrackAssociationCollection> trackH;
@@ -712,9 +719,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //       continue;
 //     }
     
-        
-//     std::cout << "initial reference point parameters:" << std::endl;
-//     std::cout << track.parameters() << std::endl;
+    if (debugprintout_) {
+      std::cout << "initial reference point parameters:" << std::endl;
+      std::cout << track.parameters() << std::endl;
+    }
 
     //prepare hits
     TransientTrackingRecHit::RecHitContainer hits;
@@ -799,15 +807,27 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     unsigned int bfieldidx = 0;
 //     unsigned int elossidx = 0;
     
-//     constexpr unsigned int niters = 4;
+//     constexpr unsigned int niters = 2;
     constexpr unsigned int niters = 1;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
-//       std::cout<< "iter " << iiter << std::endl;
+      if (debugprintout_) {
+        std::cout<< "iter " << iiter << std::endl;
+      }
+      
+      const bool islikelihood = iiter > 0;
+//       const bool islikelihood = true;
       
       gradfull = VectorXd::Zero(nparmsfull);
       hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
       statejac = MatrixXd::Zero(nstateparmspost, nstateparms);
+      
+      evector<std::array<Matrix<double, 8, 8>, 11> > dhessv;
+      if (islikelihood) {
+        dhessv.resize(nhits-1);
+      }
+      
+//       dhessv.reserve(nhits-1);
       
       unsigned int parmidx = 0;
       unsigned int alignmentparmidx = 0;
@@ -885,7 +905,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
        
         //process noise jacobians
-//         const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
+        const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
         
         //TODO update code to allow doing this in one step with nominal update
         //temporary tsos to extract process noise without loss of precision
@@ -927,7 +947,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           break;
         }
 
-        const bool genconstraint = dogen && ihit==0;
+        //FIXME take care of this elsewhere for the moment
+//         const bool genconstraint = dogen && ihit==0;
+        const bool genconstraint = false;
         
         if (ihit < (nhits-1)) {
 
@@ -1082,6 +1104,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             Matrix<MSScalar, 2, 1> dum = Matrix<MSScalar, 2, 1>::Zero();
             //suppress gradients of reference point parameters when fitting with gen constraint
             for (unsigned int j=0; j<dum.size(); ++j) {
+              //FIXME this would be the correct condition if we were using it
+//               if (dogen && ihit < 2) {
               if (genconstraint) {
                 init_twice_active_null(dum[j], nlocal);
               }
@@ -1146,59 +1170,109 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             const MSScalar deloss0(dx0[0]);
 
             
-            const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
-            const MSScalar chisqms = dms.transpose()*Qinvms*dms;
-            //energy loss term
+//             const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
+//             const MSScalar chisqms = dms.transpose()*Qinvms*dms;
+//             //energy loss term
+//             
+//             
+//             const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+//             const MSScalar chisqeloss = deloss*deloss*invSigmaE;
+//             
+//             const MSScalar chisq = chisqms + chisqeloss;
             
             
-            const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
-            const MSScalar chisqeloss = deloss*deloss*invSigmaE;
-            
-            const MSScalar chisq = chisqms + chisqeloss;
+
             
 //             const bool dolikelihood = false;
 //           
-//             MSScalar chisq;
-//             
-//             if (true) {
-//               //standard chisquared contribution
-//               
-//               const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
-//               const MSScalar chisqms = dms.transpose()*Qinvms*dms;
-//               //energy loss term
-//               
-//               
-//               const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
-//               const MSScalar chisqeloss = deloss*deloss*invSigmaE;
-//               
-//               chisq = chisqms + chisqeloss;
-//             }
-//             else {
-//               //maximum likelihood contribution 
-//               const MSCovariance dQdqop = dQs[0].cast<MSScalar>();
+            MSScalar chisq;
+            
+            if (!islikelihood) {
+              //standard chisquared contribution
+              
+              const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
+              const MSScalar chisqms = dms.transpose()*Qinvms*dms;
+              //energy loss term
+              
+              
+              const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+              const MSScalar chisqeloss = deloss*invSigmaE*deloss;
+              
+              chisq = chisqms + chisqeloss;
+            }
+            else {
+//               islikelihood = true;
+              //maximum likelihood contribution 
+              const MSCovariance dQdqop = dQs[0].cast<MSScalar>();
 //               const MSCovariance dQddxdz = dQs[1].cast<MSScalar>();
 //               const MSCovariance dQddydz = dQs[2].cast<MSScalar>();
 //               const MSCovariance dQdxi = dQs[3].cast<MSScalar>();
-//               
+              
 //               const MSCovariance dQ = dqopm*dQdqop + dalpham[0]*dQddxdz + dalpham[1]*dQddydz + dxi*dQdxi;
-// //               const MSCovariance dQ = 0.5*(dqop+dqopm)*dQdqop + 0.5*(dalpham[0] + dalphap[0])*dQddxdz + 0.5*(dalpham[1]+dalphap[1])*dQddydz + dxi*dQdxi;
+//               const MSCovariance dQ = 0.5*(dqop+dqopm)*dQdqop;
+              const MSCovariance dQ = dqopm*dQdqop;
+//               const MSCovariance dQ = 0.5*(dqop+dqopm)*dQdqop + 0.5*(dalpham[0] + dalphap[0])*dQddxdz + 0.5*(dalpham[1]+dalphap[1])*dQddydz + dxi*dQdxi;
+              
+              const Matrix<MSScalar, 2, 2> Qmsnom = Q.block<2,2>(1,1).cast<MSScalar>();
+              const Matrix<MSScalar, 2, 2> Qmsnominv = Qmsnom.inverse();
+              const Matrix<MSScalar, 2, 2> Qmsinv = Qmsnominv - Qmsnominv*dQ.block<2,2>(1,1)*Qmsnominv;
+              
+              
 //               const Matrix<MSScalar, 2, 2> Qms = Q.block<2,2>(1,1).cast<MSScalar>() + dQ.block<2,2>(1,1);
+//               const Matrix<MSScalar, 2, 2> Qmsinv = Qms.inverse();
 //               const MSScalar logdetQms = Eigen::log(Qms.determinant());
-//               
-//               const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
-//               MSScalar chisqms = dms.transpose()*Qms.inverse()*dms;
+              
+              const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
+              MSScalar chisqms = dms.transpose()*Qmsinv*dms;
 //               chisqms = chisqms + logdetQms;
-//               
-//               //energy loss term
+              
+              //energy loss term
 //               const MSScalar sigmaE = MSScalar(Q(0,0)) + dQ(0,0);
+//               const MSScalar sigmaEinv = 1./sigmaE;
+              
+              const MSScalar sigmaEnom = MSScalar(Q(0,0));
+              const MSScalar sigmaEnominv = 1./sigmaEnom;
+              
+              const MSScalar sigmaEinv = sigmaEnominv - sigmaEnominv*dQ(0,0)*sigmaEnominv;
+              
 //               const MSScalar logsigmaE = Eigen::log(sigmaE);
-//               
-//               const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
-//               MSScalar chisqeloss = deloss*deloss/sigmaE;
+              
+              const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+              MSScalar chisqeloss = deloss*sigmaEinv*deloss;
 //               chisqeloss = chisqeloss + logsigmaE;
-//               
-//               chisq = chisqms + chisqeloss;
-//             }
+              
+              chisq = chisqms + chisqeloss;
+              
+              //compute contributions to hessian matrix-vector derivative
+              for (unsigned int i=0; i<nlocal; ++i) {
+                MSScalar x(0.);
+                init_twice_active_var(x, nlocal, i);
+                
+                Matrix<MSScalar, 2, 2> dQmsinv;
+                for (unsigned int j=0; j<2; ++j) {
+                  for (unsigned int k=0; k<2; ++k) {
+                    dQmsinv(j,k) = MSScalar(Qmsinv(j,k).value().derivatives()[i]);
+                  }
+                }
+                const MSScalar dSigmaEinv(sigmaEinv.value().derivatives()[i]);
+                
+                MSScalar dchisqms = dms.transpose()*dQmsinv*x*dms;
+//                 dchisqms = 3.*dchisqms;
+                MSScalar dchisqeloss = deloss*deloss*dSigmaEinv*x;
+//                 dchisqeloss = 3.*dchisqeloss;
+                const MSScalar dchisq = dchisqms + dchisqeloss;
+                
+                //TODO should this be 11x11 instead?
+                //TODO check additional factor of 2
+                for (unsigned int j=0; j<8; ++j) {
+                  for (unsigned int k=0; k<8; ++k) {
+                    dhessv[ihit][i](j,k) = dchisq.derivatives()[j].derivatives()[k];
+                  }
+                }
+                
+              }
+              
+            }
             
           
             
@@ -1324,6 +1398,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         //hit information
         //FIXME consolidate this special cases into templated function(s)
         if (preciseHit->isValid()) {
+          const bool ispixel = GeomDetEnumerators::isTrackerPixel(preciseHit->det()->subDetector());
 //         if (false) {
           constexpr unsigned int nlocalstate = 2;
           constexpr unsigned int localstateidx = 0;
@@ -1335,6 +1410,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //           const unsigned int fullstateidx = 3*ihit;
           const unsigned int fullparmidx = nstateparms + nparsBfield + nparsEloss + alignmentparmidx;
 
+//           if (!ispixel || preciseHit->dimension()==1) {
           if (preciseHit->dimension()==1) {
             constexpr unsigned int nlocalalignment = 1;
             constexpr unsigned int nlocalparms = nlocalalignment;
@@ -1391,7 +1467,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             alignmentparmidx++;
           }
           else if (preciseHit->dimension()==2) {
-            bool ispixel = GeomDetEnumerators::isTrackerPixel(preciseHit->det()->subDetector());
+            
 
             Matrix2d iV;
             iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
@@ -1530,8 +1606,15 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       //fake constraint on reference point parameters
       if (dogen) {
         for (unsigned int i=0; i<5; ++i) {
+          gradfull[i] = 0.;
+          hessfull.row(i) *= 0.;
+          hessfull.col(i) *= 0.;
           hessfull(i,i) = 1e6;
         }
+        //b field from reference point not consistently used in this case
+        gradfull[nstateparms] = 0.;
+        hessfull.row(nstateparms) *= 0.;
+        hessfull.col(nstateparms) *= 0.;
       }
       
       //now do the expensive calculations and fill outputs
@@ -1556,6 +1639,38 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //       auto const& Cinvd = d2chisqdx2.ldlt();
       Cinvd.compute(d2chisqdx2);
       
+      
+      if (islikelihood) {
+        const MatrixXd Cfull = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms));
+        
+        // add ln det terms to gradient and hessian
+  //       MatrixXd dhessfulli;
+  //       MatrixXd dhessfullj;
+  //       VectorXd dgradfull;
+        // TODO should this cover correction parameter part of the matrix as well?
+        for (unsigned int ihit=0; ihit<(nhits-1); ++ihit) {
+          constexpr unsigned int localstateidx = 0;
+          const unsigned int fullstateidx = 3*ihit;
+          
+          auto const& Cblock = Cfull.block<8,8>(fullstateidx, fullstateidx);
+          
+  //         dhessfulli = MatrixXd::Zero(nstateparms, nstateparms);
+  //         dhessfullj = MatrixXd::Zero(nstateparms, nstateparms);
+          
+          //TODO fill correction parameter block as well
+          for (unsigned int i=0; i<8; ++i) {
+            gradfull[fullstateidx + i] += (Cblock*dhessv[ihit][i]).trace();
+            for (unsigned int j=0; j<8; ++j) {
+              hessfull(fullstateidx + i, fullstateidx + j) += (-Cblock*dhessv[ihit][j]*Cblock*dhessv[ihit][i]).trace();
+            }
+          }
+          
+        }
+        
+        Cinvd.compute(d2chisqdx2);
+      
+      }
+      
       dxfull = -Cinvd.solve(dchisqdx);
       
       dxstate = statejac*dxfull;
@@ -1579,8 +1694,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
 //       const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
 
-//       std::cout<< "dxRef" << std::endl;
-//       std::cout<< dxRef << std::endl;
+      if (debugprintout_) {
+        std::cout<< "dxRef" << std::endl;
+        std::cout<< dxRef << std::endl;
+      }
       
       //fill output with corrected state and covariance at reference point
       refParms.fill(0.);
@@ -1633,6 +1750,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
     
     dxdparms = -Cinvd.solve(d2chisqdxdparms).transpose();
+    
+//     if (debugprintout_) {
+//       std::cout << "dxrefdparms" << std::endl;
+//       std::cout << dxdparms.leftCols<5>() << std::endl;
+//     }
     
     grad = dchisqdparms + dxdparms*dchisqdx;
     //TODO check the simplification
@@ -1707,16 +1829,19 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       }
     }
     
-//     const Matrix5d Cinner = (statejac*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms))*statejac.transpose()).topLeftCorner<5,5>();
-//     std::cout << "hess debug" << std::endl;
-//     std::cout << "track parms" << std::endl;
-//     std::cout << tkparms << std::endl;
-// //     std::cout << "dxRef" << std::endl;
-// //     std::cout << dxRef << std::endl;
-//     std::cout << "original cov" << std::endl;
-//     std::cout << track.covariance() << std::endl;
-//     std::cout << "recomputed cov" << std::endl;
-//     std::cout << 2.*Cinner << std::endl;
+    
+    if (debugprintout_) {
+      const Matrix5d Cinner = (statejac*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms))*statejac.transpose()).topLeftCorner<5,5>();
+      std::cout << "hess debug" << std::endl;
+      std::cout << "track parms" << std::endl;
+      std::cout << tkparms << std::endl;
+  //     std::cout << "dxRef" << std::endl;
+  //     std::cout << dxRef << std::endl;
+      std::cout << "original cov" << std::endl;
+      std::cout << track.covariance() << std::endl;
+      std::cout << "recomputed cov" << std::endl;
+      std::cout << 2.*Cinner << std::endl;
+    }
 
 //     std::cout << "dxinner/dparms" << std::endl;
 //     std::cout << dxdparms.bottomRows<5>() << std::endl;
@@ -2203,7 +2328,8 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::curvtransportJacobian(const 
   const double cutCriterion = std::abs(s * qop0);
   
 //   std::cout << "cutCriterion " << cutCriterion << std::endl;
-  if (cutCriterion > limit) {
+//   if (cutCriterion > limit) {
+  if (true) {
     
     // large s limit, use CMSSW calculation which
     // explicitly uses final position and momentum from propagation
@@ -2913,19 +3039,19 @@ std::array<Matrix<double, 5, 5>, 5> ResidualGlobalCorrectionMaker::processNoiseJ
   
   Matrix<double, 5, 5> &dQddxdz = res[1];
   dQddxdz = Matrix<double, 5, 5>::Zero();
-  dQddxdz(0,0) = delosddxdz;
-  dQddxdz(1,1) = dmsxxddxdz;
-  dQddxdz(1,2) = dmsxyddxdz;
-  dQddxdz(2,1) = dmsxyddxdz;
-  dQddxdz(2,2) = dmsyyddxdz;
+//   dQddxdz(0,0) = delosddxdz;
+//   dQddxdz(1,1) = dmsxxddxdz;
+//   dQddxdz(1,2) = dmsxyddxdz;
+//   dQddxdz(2,1) = dmsxyddxdz;
+//   dQddxdz(2,2) = dmsyyddxdz;
   
   Matrix<double, 5, 5> &dQddydz = res[2];
   dQddydz = Matrix<double, 5, 5>::Zero();
-  dQddydz(0,0) = delosddydz;
-  dQddydz(1,1) = dmsxxddydz;
-  dQddydz(1,2) = dmsxyddydz;
-  dQddydz(2,1) = dmsxyddydz;
-  dQddydz(2,2) = dmsyyddydz;
+//   dQddydz(0,0) = delosddydz;
+//   dQddydz(1,1) = dmsxxddydz;
+//   dQddydz(1,2) = dmsxyddydz;
+//   dQddydz(2,1) = dmsxyddydz;
+//   dQddydz(2,2) = dmsyyddydz;
   
   Matrix<double, 5, 5> &dQdxi = res[3];
   dQdxi = Matrix<double, 5, 5>::Zero();
@@ -2942,7 +3068,7 @@ std::array<Matrix<double, 5, 5>, 5> ResidualGlobalCorrectionMaker::processNoiseJ
   dQdradLen(1,2) = dmsxydradLen;
   dQdradLen(2,1) = dmsxydradLen;
   dQdradLen(2,2) = dmsyydradLen;
-//   
+  
   return res;
 }
 
