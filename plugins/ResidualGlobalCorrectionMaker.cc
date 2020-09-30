@@ -3,7 +3,7 @@
 
 // user include files
 #include "FWCore/Framework/interface/Frameworkfwd.h"
-#include "FWCore/Framework/interface/EDAnalyzer.h"
+#include "FWCore/Framework/interface/stream/EDAnalyzer.h"
 
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/ESHandle.h"
@@ -54,6 +54,15 @@
 #include "DataFormats/Math/interface/invertPosDefMatrix.h"
 #include "DataFormats/Math/interface/ProjectMatrix.h"
 #include "TrackingTools/Records/interface/TrackingComponentsRecord.h" 
+
+#include "Geometry/TrackerGeometryBuilder/interface/StripGeomDetUnit.h"
+#include "Geometry/CommonDetUnit/interface/GluedGeomDet.h"
+#include "DataFormats/TrackerRecHit2D/interface/TrackerSingleRecHit.h"
+#include "SimDataFormats/TrackingHit/interface/PSimHit.h"
+#include "TrackingTools/PatternTools/interface/TSCPBuilderNoMaterial.h"
+#include "TrackingTools/PatternTools/interface/TSCBLBuilderWithPropagator.h"
+#include "DataFormats/TrackingRecHit/interface/InvalidTrackingRecHit.h"
+#include "DataFormats/GeometrySurface/interface/Cylinder.h"
 
 #include "FWCore/ServiceRegistry/interface/Service.h"
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
@@ -142,7 +151,7 @@ namespace std{
 template<typename T, int N>
 using AANT = AutoDiffScalar<Matrix<AutoDiffScalar<Matrix<T, N, 1>>, Dynamic, 1, 0, N, 1>>;
 
-class ResidualGlobalCorrectionMaker : public edm::EDAnalyzer
+class ResidualGlobalCorrectionMaker : public edm::stream::EDAnalyzer<>
 {
 public:
   explicit ResidualGlobalCorrectionMaker(const edm::ParameterSet &);
@@ -152,9 +161,9 @@ public:
 
 private:
   
-  virtual void beginJob() override;
+  virtual void beginStream(edm::StreamID) override;
   virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
-  virtual void endJob() override;
+  virtual void endStream() override;
 
   virtual void beginRun(edm::Run const&, edm::EventSetup const&) override;
   //virtual void endRun(edm::Run const&, edm::EventSetup const&) override;
@@ -180,9 +189,13 @@ private:
                                                              const double& s,
                                                              const GlobalVector& bfield) const;
                                                              
+  AlgebraicVector5 localMSConvolution(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const;
+                                                             
   Matrix<double, 5, 6> materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
   
   std::array<Matrix<double, 5, 5>, 5> processNoiseJacobians(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const;
+  
+  Matrix<double, 2, 1> localPositionConvolution(const TrajectoryStateOnSurface& tsos) const;
   
   template <unsigned int D>
   AlgebraicVector5 lupdate(const TrajectoryStateOnSurface& tsos, const TrackingRecHit& aRecHit);
@@ -203,12 +216,14 @@ private:
   edm::EDGetTokenT<reco::TrackCollection> inputTrackOrig_;
   edm::EDGetTokenT<std::vector<int> > inputIndices_;
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
+//   edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
+  std::vector<edm::EDGetTokenT<std::vector<PSimHit>>> inputSimHits_;
 
-//   TFile *fout;
+  TFile *fout;
   TTree *tree;
-  TTree *runtree;
-  TTree *gradtree;
-  TTree *hesstree;
+//   TTree *runtree;
+//   TTree *gradtree;
+//   TTree *hesstree;
 
   float trackEta;
   float trackPhi;
@@ -257,6 +272,14 @@ private:
   
   std::vector<float> hesspackedv;
   
+  std::vector<unsigned int> hitidxv;
+  std::vector<float> dxrecgen;
+  std::vector<float> dyrecgen;
+  std::vector<float> dxsimgen;
+  std::vector<float> dysimgen;
+  std::vector<float> dxrecsim;
+  std::vector<float> dyrecsim;
+  
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
   
   unsigned int run;
@@ -271,6 +294,28 @@ private:
   bool fillTrackTree_;
   
   bool debugprintout_;
+  
+  bool doSim_;
+  
+  float dxpxb1;
+  float dypxb1;
+  
+  float dxttec9rphisimgen;
+  float dyttec9rphisimgen;
+  float dxttec9rphi;
+  float dxttec9stereo;
+
+  float dxttec4rphisimgen;
+  float dyttec4rphisimgen;
+  float dxttec4rphirecsim;
+  
+  float dxttec4rphi;
+  float dxttec4stereo;
+  
+  float simlocalxref;
+  float simlocalyref;
+  
+//   bool filledRunTree_;
   
 };
 
@@ -294,11 +339,30 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 //   inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
   inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
   inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
-  inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag("generalTracks"));
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
+  
+  
+  inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("src")));
+
   
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
+  doSim_ = iConfig.getParameter<bool>("doSim");
+  
+  if (doSim_) {
+//     inputSimHits_ = consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits","TrackerHitsTECLowTof"));
+    std::vector<std::string> labels;
+    labels.push_back("TrackerHitsPixelBarrelLowTof");
+    labels.push_back("TrackerHitsPixelEndcapLowTof");
+    labels.push_back("TrackerHitsTECLowTof");
+    labels.push_back("TrackerHitsTIBLowTof");
+    labels.push_back("TrackerHitsTIDLowTof");
+    labels.push_back("TrackerHitsTOBLowTof");
+    
+    for (const std::string& label : labels) {
+      inputSimHits_.push_back(consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits", label)));
+    }
+  }
   
   debugprintout_ = false;
 
@@ -310,68 +374,11 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 //   fout->SetCompressionAlgorithm(ROOT::kLZ4);
 //   fout->SetCompressionLevel(3);
   
-  edm::Service<TFileService> fs;
+//   edm::Service<TgFileService> fs;
   
 //   tree = new TTree("tree", "tree");
   
-  runtree = fs->make<TTree>("runtree","");
-  gradtree = fs->make<TTree>("gradtree","");
-  hesstree = fs->make<TTree>("hesstree","");
-  
-  
-  if (fillTrackTree_) {
-    tree = fs->make<TTree>("tree","");
-    const int basketSize = 4*1024*1024;
-    tree->SetAutoFlush(0);
-    
-    tree->Branch("trackPt", &trackPt, basketSize);
-    tree->Branch("trackPtErr", &trackPtErr, basketSize);
-    tree->Branch("trackEta", &trackEta, basketSize);
-    tree->Branch("trackPhi", &trackPhi, basketSize);
-    tree->Branch("trackCharge", &trackCharge, basketSize);
-    //workaround for older ROOT version inability to store std::array automatically
-  //   tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
-  //   tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
-    tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
-    tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
-    
-    tree->Branch("refParms_iter0", refParms_iter0.data(), "refParms_iter0[5]/F", basketSize);
-    tree->Branch("refCov_iter0", refCov_iter0.data(), "refCov_iter0[25]/F", basketSize);
-  //   tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
-  //   tree->Branch("refCov_iter2", refCov_iter2.data(), "refCov_iter2[25]/F", basketSize);  
-    
-    tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
-    tree->Branch("refCov", refCov.data(), "refCov[25]/F", basketSize);
-    tree->Branch("genParms", genParms.data(), "genParms[5]/F", basketSize);
 
-    tree->Branch("genPt", &genPt, basketSize);
-    tree->Branch("genEta", &genEta, basketSize);
-    tree->Branch("genPhi", &genPhi, basketSize);
-    tree->Branch("genCharge", &genCharge, basketSize);
-    
-    tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
-    
-    tree->Branch("nHits", &nHits, basketSize);
-    tree->Branch("nValidHits", &nValidHits, basketSize);
-    tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
-    tree->Branch("nParms", &nParms, basketSize);
-    tree->Branch("nJacRef", &nJacRef, basketSize);
-    
-  //   tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
-    tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
-    tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
-    
-  //   tree->Branch("nSym", &nSym, basketSize);
-    
-  //   tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
-    
-    tree->Branch("run", &run);
-    tree->Branch("lumi", &lumi);
-    tree->Branch("event", &event);
-    
-    tree->Branch("gradmax", &gradmax);
-    tree->Branch("hessmax", &hessmax);
-  }
 
 }
 
@@ -404,6 +411,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
   
+  edm::ESHandle<TrackerTopology> trackerTopology;
+  iSetup.get<TrackerTopologyRcd>().get(trackerTopology);
+  
 //   ESHandle<MagneticField> magfield;
 //   iSetup.get<IdealMagneticFieldRecord>().get(magfield);
 //   auto field = magfield.product();
@@ -412,9 +422,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
   
   ESHandle<Propagator> thePropagator;
-//   iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
-  iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", thePropagator);
+  iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
+//   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", thePropagator);
 //   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterialParabolicMf", thePropagator);
+//   iSetup.get<TrackingComponentsRecord>().get("Geant4ePropagator", thePropagator);
   const MagneticField* field = thePropagator->magneticField();
   
   
@@ -436,6 +447,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   
   const reco::BeamSpot& bs = *bsH;
 
+//   Handle<std::vector<PSimHit>> tecSimHits;
+  std::vector<Handle<std::vector<PSimHit>>> simHits(inputSimHits_.size());
+  if (doSim_) {
+    for (unsigned int isimhit = 0; isimhit<inputSimHits_.size(); ++isimhit) {
+      iEvent.getByToken(inputSimHits_[isimhit], simHits[isimhit]);
+    }
+  }
+//   if (doSim_) {
+//     iEvent.getByToken(inputSimHits_, tecSimHits);
+//   }
+  
 //   const float mass = 0.105;
 //   const float maxDPhi = 1.6;
 //   PropagatorWithMaterial rPropagator(oppositeToMomentum, mass, field, maxDPhi, true, -1., false);
@@ -447,6 +469,80 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
 
+  // set up cylindrical surface for beam pipe
+  const double ABe = 9.0121831;
+  const double ZBe = 4.;
+  const double K =  0.307075*1e-3;
+  const double dr = 0.08;
+//   const double xibeampipe = 0.5*K*dr*ZBe/ABe;
+  const double xibeampipe = 0.*0.5*K*dr*ZBe/ABe;
+  
+  
+  
+  
+  auto beampipe = Cylinder::build(Surface::PositionType(0.,0.,0.), Surface::RotationType(), 2.94);
+  beampipe->setMediumProperties(MediumProperties(0., xibeampipe));
+  
+//   std::cout << "xi beampipe: " << xibeampipe << std::endl;
+  
+//   const GeomDet *testdet = nullptr;
+//   //debugging
+//   for (const GeomDet* det : globalGeometry->detUnits()) {
+//     if (!det) {
+//       continue;
+//     }
+//     
+//     if (det->subDetector() == GeomDetEnumerators::TEC) {
+//       const DetId& detid = det->geographicalId();
+// //       TECDetId detid(det->geographicalId());
+// //       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+//       unsigned int side = trackerTopology->tecSide(detid);
+//       unsigned int wheel = trackerTopology->tecWheel(detid);
+//       int layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
+//       bool stereo = trackerTopology->isStereo(det->geographicalId());
+//       
+//       if (layer == -9) {
+//         testdet = det;
+//         break;
+//         
+//       }
+//     }
+//     
+//     
+//     
+//   }
+//   
+//   if (testdet) {
+//     const GlobalPoint center = testdet->surface().toGlobal(LocalPoint(1.,0.));
+//     
+//     const GlobalVector centerv(center.x(), center.y(), center.z());
+//     const GlobalVector dir = centerv/centerv.mag();
+//     const double sintheta = dir.perp();
+//     const GlobalVector mom = (100000./sintheta)*dir;
+//     const GlobalPoint pos(0.,0.,0.);
+//     
+//     FreeTrajectoryState ftsplus(pos, mom, 1., field);
+//     FreeTrajectoryState ftsminus(pos, mom, -1., field);
+//     
+//     const TrajectoryStateOnSurface tsosplus = fPropagator->propagate(ftsplus, testdet->surface());
+//     const TrajectoryStateOnSurface tsosminus = fPropagator->propagate(ftsminus, testdet->surface());
+//     
+//     std::cout << "global target" << std::endl;
+//     std::cout << center << std::endl;
+//     
+//     std::cout << "momentum" << std::endl;
+//     std::cout << mom << std::endl;
+//     
+//     std::cout << "tsosplus local:" << std::endl;
+//     std::cout << tsosplus.localPosition() << std::endl;
+//     std::cout << "tsosminus local:" << std::endl;
+//     std::cout << tsosminus.localPosition() << std::endl;
+//     
+//     std::cout << "delta local" << std::endl;
+//     std::cout << tsosplus.localPosition() - tsosminus.localPosition() << std::endl;
+//     
+//   }
+  
   
 //   TkClonerImpl hitCloner;
 //   TKCloner const* cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(builder)->cloner()
@@ -543,7 +639,22 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     //TODO properly handle the outside-in case
     assert(track.seedDirection() == alongMomentum);
     
-    const unsigned int nhits = track.recHitsSize();
+    //prepare hits
+    TransientTrackingRecHit::RecHitContainer hits;
+    hits.reserve(track.recHitsSize());
+//     hits.reserve(track.recHitsSize()+1);
+//     hits.push_back(RecHitPointer(InvalidTrackingRecHit());
+    
+    for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
+      const GeomDet *detectorG = globalGeometry->idToDet((*it)->geographicalId());
+//       if (it==track.recHitsBegin()) {
+//         hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::missing)));
+//       }
+      hits.push_back((*it)->cloneForFit(*detectorG));
+    }
+    
+//     const unsigned int nhits = track.recHitsSize();
+    const unsigned int nhits = hits.size();
     nHits = nhits;
 //     unsigned int npixhits = 0;
 
@@ -556,6 +667,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       auto const& hit = *(hitsbegin + ihit);
       if (hit->isValid() && hit->dimension()<=2) {
         nvalid += 1;
+        
         const GeomDet *detectorG = globalGeometry->idToDet(hit->geographicalId());
         if (hit->dimension()==2 && GeomDetEnumerators::isTrackerPixel(detectorG->subDetector())) {
           nvalidpixel += 1;
@@ -724,13 +836,37 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       std::cout << track.parameters() << std::endl;
     }
 
-    //prepare hits
-    TransientTrackingRecHit::RecHitContainer hits;
-    hits.reserve(track.recHitsSize());
-    for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
-      const GeomDet *detectorG = globalGeometry->idToDet((*it)->geographicalId());
-      hits.push_back((*it)->cloneForFit(*detectorG));
-    }
+//     //prepare hits
+//     TransientTrackingRecHit::RecHitContainer hits;
+//     hits.reserve(track.recHitsSize());
+//     for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
+//       const GeomDet *detectorG = globalGeometry->idToDet((*it)->geographicalId());
+//       hits.push_back((*it)->cloneForFit(*detectorG));
+//     }
+    
+//     // fix mixed up clusters?
+//     for (unsigned int ihit=0; ihit<(hits.size()-1); ++ihit) {
+//       TrackerSingleRecHit* hit = const_cast<TrackerSingleRecHit*>(dynamic_cast<const TrackerSingleRecHit*>(hits[ihit].get()));
+//       TrackerSingleRecHit* nexthit = const_cast<TrackerSingleRecHit*>(dynamic_cast<const TrackerSingleRecHit*>(hits[ihit+1].get()));
+//       
+// //      const TrackingRecHitSingle* nexthit = hits[ihit+1];
+//       
+//       if (!hit || !nexthit) {
+//         continue;
+//       }
+//       
+//       const DetId partnerid = trackerTopology->partnerDetId(hit->geographicalId());
+// //       
+//       if (partnerid == nexthit->geographicalId()) {
+// //         std::cout << "swapping clusters" << std::endl;
+//         const OmniClusterRef::ClusterStripRef cluster = hit->cluster_strip();
+//         const OmniClusterRef::ClusterStripRef nextcluster = nexthit->cluster_strip();
+//         
+//         hit->setClusterStripRef(nextcluster);
+//         nexthit->setClusterStripRef(cluster);
+//       }
+// 
+//     }
     
     
     FreeTrajectoryState refFts;
@@ -743,14 +879,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
       const GlobalTrajectoryParameters refglobal(refpos, refmom, genpart->charge(), field);
       
-      std::cout << "gen ref state" << std::endl;
-      std::cout << refpos << std::endl;
-      std::cout << refmom << std::endl;
-      std::cout << genpart->charge() << std::endl;
+//       std::cout << "gen ref state" << std::endl;
+//       std::cout << refpos << std::endl;
+//       std::cout << refmom << std::endl;
+//       std::cout << genpart->charge() << std::endl;
       
       //zero uncertainty on generated parameters
-      AlgebraicSymMatrix55 nullerr;
-      const CurvilinearTrajectoryError referr(nullerr);
+//       AlgebraicSymMatrix55 nullerr;
+//       const CurvilinearTrajectoryError referr(nullerr);
       
       refFts = FreeTrajectoryState(refpos, refmom, genpart->charge(), field);
 //       refFts = FreeTrajectoryState(refglobal, referr);
@@ -762,7 +898,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
       const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
       const GlobalTrajectoryParameters refglobal(refpos, refmom, track.charge(), field);
-      const CurvilinearTrajectoryError referr(track.covariance());
+//       const CurvilinearTrajectoryError referr(track.covariance());
+      
+      //null uncertainty (tracking process noise sum only)
+//       AlgebraicSymMatrix55 nullerr;
+//       const CurvilinearTrajectoryError referr(nullerr);
+      
       refFts = FreeTrajectoryState(refpos, refmom, track.charge(), field);
 //       refFts = FreeTrajectoryState(refglobal, referr);
     }
@@ -815,6 +956,28 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         std::cout<< "iter " << iiter << std::endl;
       }
       
+      hitidxv.clear();
+      hitidxv.reserve(nvalid);
+      
+      dxrecgen.clear();
+      dxrecgen.reserve(nvalid);
+      
+      dyrecgen.clear();
+      dyrecgen.reserve(nvalid);
+      
+      dxsimgen.clear();
+      dxsimgen.reserve(nvalid);
+      
+      dysimgen.clear();
+      dysimgen.reserve(nvalid);
+      
+      dxrecsim.clear();
+      dxrecsim.reserve(nvalid);
+      
+      dyrecsim.clear();
+      dyrecsim.reserve(nvalid);
+      
+        
       const bool islikelihood = iiter > 0;
 //       const bool islikelihood = true;
       
@@ -826,6 +989,24 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       if (islikelihood) {
         dhessv.resize(nhits-1);
       }
+      
+      dxpxb1 = -99.;
+      dypxb1 = -99.;
+      dxttec9rphi = -99.;
+      dxttec9stereo = -99.;
+      dxttec4rphi = -99.;
+      dxttec4stereo = -99.;
+      
+      dxttec4rphisimgen = -99.;
+      dyttec4rphisimgen = -99.;
+      dxttec4rphirecsim = -99.;
+      
+      dxttec9rphisimgen = -99.;
+      dyttec9rphisimgen = -99.;
+      
+      simlocalxref = -99.;
+      simlocalyref = -99.;
+      
       
 //       dhessv.reserve(nhits-1);
       
@@ -861,11 +1042,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //       ;
       
       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *hits[0]->surface());
+//       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *beampipe);
       if (!propresult.first.isValid()) {
         std::cout << "Abort: Propagation of reference state Failed!" << std::endl;
         valid = false;
         break;
       }
+      
+//       std::cout << "position on beampipe " << propresult.first.globalParameters().position() << std::endl;
       
       const Matrix<double, 5, 6> FdFp = curv2localTransportJacobian(refFts, propresult, false);
 
@@ -900,6 +1084,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         auto const& hit = hits[ihit];
         
         TrajectoryStateOnSurface updtsos = propresult.first;
+        
+        //apply measurement update if applicable
+        auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
+        if (hit->isValid() && !preciseHit->isValid()) {
+          std::cout << "Abort: Failed updating hit" << std::endl;
+          valid = false;
+          break;
+        }
+        
+        // compute convolution correction in local coordinates (BEFORE material effects are applied)
+//         const Matrix<double, 2, 1> dxlocalconv = localPositionConvolution(updtsos);
          
         //energy loss jacobian
         const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
@@ -926,12 +1121,33 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
         const AlgebraicVector5 dxeloss = tmptsos.localParameters().vector() - updtsos.localParameters().vector();
         
+        // compute convolution effects
+//         const AlgebraicVector5 dlocalconv = localMSConvolution(updtsos, fPropagator->materialEffectsUpdator());
+        
+//         const GlobalPoint updtsospos = updtsos.globalParameters().position();
+//         std::cout << "before material update: " << updtsos.globalParameters().position() << " " << updtsos.globalParameters().momentum() << std::endl;
         ok = fPropagator->materialEffectsUpdator().updateStateInPlace(updtsos, alongMomentum);
         if (!ok) {
           std::cout << "Abort: material update failed" << std::endl;
           valid = false;
           break;
         }
+//         std::cout << "after material update: " << updtsos.globalParameters().position() << " " << updtsos.globalParameters().momentum() << std::endl;
+        
+        
+//         std::cout << "local parameters" << std::endl;
+//         std::cout << updtsos.localParameters().vector() << std::endl;
+//         std::cout << "dlocalconv" << std::endl;
+//         std::cout << dlocalconv << std::endl;
+//         
+//         // apply convolution effects
+//         const LocalTrajectoryParameters localupd(updtsos.localParameters().vector() + dlocalconv,
+//                                                  updtsos.localParameters().pzSign());
+//         updtsos.update(localupd,
+// //                        updtsos.localError(),
+//                        updtsos.surface(),
+//                        updtsos.magneticField(),
+//                        updtsos.surfaceSide());
         
         //get the process noise matrix
         AlgebraicMatrix55 const Qmat = tmptsos.localError().matrix();
@@ -939,13 +1155,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         std::cout<< "Q" << std::endl;
 //         std::cout<< Q << std::endl;
         
-        //apply measurement update if applicable
-        auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
-        if (hit->isValid() && !preciseHit->isValid()) {
-          std::cout << "Abort: Failed updating hit" << std::endl;
-          valid = false;
-          break;
-        }
+
+        
+        
+        
 
         //FIXME take care of this elsewhere for the moment
 //         const bool genconstraint = dogen && ihit==0;
@@ -983,14 +1196,19 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           
           const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
 
-          
+//           if (ihit==0) {
+//             FreeTrajectoryState tmpfts(updtsospos, updtsos.globalParameters().momentum(), updtsos.charge(), field);
+//             propresult = fPropagator->geometricalPropagator().propagateWithPath(tmpfts, *hits[ihit+1]->surface());
+//           }
+//           else {
+//             propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
+//           }
           propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
           if (!propresult.first.isValid()) {
             std::cout << "Abort: Propagation Failed!" << std::endl;
             valid = false;
             break;
           }
-          
           
           if (true) {
 //           if (false) {
@@ -1395,9 +1613,15 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           
         }
         
+        
+//         std::cout << "hit " << ihit << " isvalid " << preciseHit->isValid() << std::endl;
+//         std::cout << "global position: " << updtsos.globalParameters().position() << std::endl;
         //hit information
         //FIXME consolidate this special cases into templated function(s)
         if (preciseHit->isValid()) {
+//           std::cout << "dxlocalconv" << std::endl;
+//           std::cout << dxlocalconv << std::endl;
+          
           const bool ispixel = GeomDetEnumerators::isTrackerPixel(preciseHit->det()->subDetector());
 //         if (false) {
           constexpr unsigned int nlocalstate = 2;
@@ -1418,6 +1642,36 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             const StripHitScalar dy0(preciseHit->localPosition().x() - updtsos.localPosition().x());
             const StripHitScalar Vinv(1./preciseHit->localPositionError().xx());
+            
+            dxrecgen.push_back(dy0.value().value());
+            dyrecgen.push_back(-99.);
+            
+            if (doSim_) {
+              bool simvalid = false;
+              for (auto const& simhith : simHits) {
+                for (const PSimHit& simHit : *simhith) {
+                  if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
+                    dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
+                    dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
+                    
+                    dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
+                    dyrecsim.push_back(-99.);
+                    
+                    simvalid = true;
+                    break;
+                  }
+                }
+                if (simvalid) {
+                  break;
+                }
+              }
+              if (!simvalid) {
+                dxsimgen.push_back(-99.);
+                dysimgen.push_back(-99.);
+                dxrecsim.push_back(-99.);
+                dyrecsim.push_back(-99.);
+              }
+            }
             
 //             std::cout << "dy0" << std::endl;
 //             std::cout << dy0 << std::endl;
@@ -1443,6 +1697,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
 //             const StripHit1DJacobian H = jacheig.block<1,2>(3,3).cast<StripHitScalar>();
             
+//             StripHitScalar qhit(updtsos.charge());
+            
             StripHitScalar dh = dy0 - dx[0] - A*dalpha;
             StripHitScalar chisq = dh*dh*Vinv;
             
@@ -1465,6 +1721,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             const unsigned int xglobalidx = detidparms.at(std::make_pair(0,preciseHit->geographicalId()));
             globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
             alignmentparmidx++;
+            
+            hitidxv.push_back(xglobalidx);
           }
           else if (preciseHit->dimension()==2) {
             
@@ -1473,6 +1731,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
                   preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
             
+//             SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
+//             std::cout << "ispixel: " << ispixel << std::endl;
+//             std::cout << "isStereo: " << trackerTopology->isStereo(preciseHit->geographicalId()) << std::endl;
+//             std::cout << "iV eigenvalues" << std::endl;
+//             std::cout << eigensolver.eigenvalues() << std::endl;
+                  
             if (ispixel) {
               constexpr unsigned int nlocalalignment = 2;
               constexpr unsigned int nlocalparms = nlocalalignment;
@@ -1481,6 +1745,59 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               PixelHit2DVector dy0;
               dy0[0] = PixelHit2DScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
               dy0[1] = PixelHit2DScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
+              
+              dxrecgen.push_back(dy0[0].value().value());
+              dyrecgen.push_back(dy0[1].value().value());
+              
+              if (doSim_) {
+                bool simvalid = false;
+                for (auto const& simhith : simHits) {
+                  for (const PSimHit& simHit : *simhith) {
+                    if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
+                      dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
+                      dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
+                      
+                      dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
+                      dyrecsim.push_back(preciseHit->localPosition().y() - simHit.localPosition().y());
+                      
+                      simvalid = true;
+                      break;
+                    }
+                  }
+                  if (simvalid) {
+                    break;
+                  }
+                }
+                if (!simvalid) {
+                  dxsimgen.push_back(-99.);
+                  dysimgen.push_back(-99.);
+                  dxrecsim.push_back(-99.);
+                  dyrecsim.push_back(-99.);
+                }
+              }
+              
+//               if (preciseHit->det()->subDetector() == GeomDetEnumerators::PixelBarrel)
+//               {
+//                 PXBDetId detid(preciseHit->det()->geographicalId());
+//                 int layer = detid.layer();
+//                 
+//                 if (layer==1) {
+//                   std::cout << "pxb1" << std::endl;
+//                   std::cout << "Surface position in global" << std::endl;
+//                   std::cout << preciseHit->surface()->position() << std::endl;
+//                   std::cout << "local x to global:" << std::endl;
+//                   std::cout << preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)) << std::endl;
+//                   std::cout << "local y to global:" << std::endl;
+//                   std::cout << preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)) << std::endl;
+//                   std::cout << "local z to global:" << std::endl;
+//                   std::cout << preciseHit->surface()->toGlobal(LocalVector(0.,0.,1.)) << std::endl;
+//                   
+//                   
+//                   dxpxb1 = preciseHit->localPosition().x() - updtsos.localPosition().x();
+//                   dypxb1 = preciseHit->localPosition().y() - updtsos.localPosition().y();
+//                 }
+//               }
+              
               
 //               std::cout << "dy0 (pixel hit)" << std::endl;
 //               std::cout << dy0 << std::endl;
@@ -1512,6 +1829,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               
 //               const PixelHit2DJacobian H = jacheig.bottomRightCorner<2,2>().cast<PixelHit2DScalar>();
 
+//               PixelHit2DScalar qhit(updtsos.charge());
+              
               const PixelHit2DVector dh = dy0 - dx - A*dalpha;
               const PixelHit2DScalar chisq = dh.transpose()*Vinv*dh;
               
@@ -1535,6 +1854,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, preciseHit->geographicalId()));
                 globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
                 alignmentparmidx++;
+                if (idim==0) {
+                  hitidxv.push_back(xglobalidx);
+                }
               }
             }
             else {
@@ -1542,14 +1864,400 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               constexpr unsigned int nlocalparms = nlocalalignment;
               constexpr unsigned int nlocal = nlocalstate + nlocalparms;
               
-              StripHitVector dy0;
-              dy0[0] = StripHitScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
-              dy0[1] = StripHitScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
+//               StripHitVector dy0;
+//               dy0[0] = StripHitScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
+//               dy0[1] = StripHitScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
               
-//               std::cout << "dy0" << std::endl;
-//               std::cout << dy0 << std::endl;
+//               std::cout << "localpos x: " << preciseHit->localPosition().x() << std::endl;
+//               std::cout << "localpos y: " << preciseHit->localPosition().y() << std::endl;
               
-              const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
+//               const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
+              
+//               const Matrix<StripHitScalar, 2, 2> rot = Matrix<StripHitScalar, 2, 2>::Identity();
+              
+              SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
+              Matrix<double, 2, 1> dy0local;
+              dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
+              dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
+              
+//               const GlobalPoint hitGlobal = preciseHit->surface()->toGlobal(preciseHit->localPosition());
+//               TSCPBuilderNoMaterial tscpbuilder;
+//               const TrajectoryStateClosestToPoint tscp = tscpbuilder(refFts, hitGlobal);
+//               dy0local[0] = (hitGlobal - tscp.position()).dot(preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)));         
+//               dy0local[1] = (hitGlobal - tscp.position()).dot(preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)));
+              
+              Matrix<double, 2, 2> v = eigensolver.eigenvectors();
+              if (v(0,0) < 0.) {
+                v.col(0) = -v.col(0);
+              }
+              if (v(1,1) < 0.) {
+                v.col(1) = -v.col(1);
+              }
+              
+              
+              const Matrix<double, 2, 1> dy0eig = v.transpose()*dy0local;
+              
+              StripHit2DCovariance Vinv = StripHit2DCovariance::Zero();
+              Vinv(0,0) = StripHitScalar(1./eigensolver.eigenvalues()[0]);
+              Vinv(1,1) = StripHitScalar(1./eigensolver.eigenvalues()[1]);
+              
+              StripHitVector dy0 = StripHitVector::Zero();
+              dy0[0] = StripHitScalar(dy0eig[0]);
+              dy0[1] = StripHitScalar(dy0eig[1]);
+              
+              dxrecgen.push_back(dy0[0].value().value());
+              dyrecgen.push_back(dy0[1].value().value());
+
+              if (doSim_) {
+                bool simvalid = false;
+                for (auto const& simhith : simHits) {
+                  for (const PSimHit& simHit : *simhith) {
+                    if (simHit.detUnitId() == preciseHit->geographicalId()) {
+                      Matrix<double, 2, 1> dysimgenlocal;
+                      dysimgenlocal[0] = simHit.localPosition().x() - updtsos.localPosition().x();
+                      dysimgenlocal[1] = simHit.localPosition().y() - updtsos.localPosition().y();
+                      
+                      const Matrix<double, 2, 1> dysimgeneig = v.transpose()*dysimgenlocal;
+                      
+                      Matrix<double, 2, 1> dyrecsimlocal;
+                      dyrecsimlocal[0] = preciseHit->localPosition().x() - simHit.localPosition().x();
+                      dyrecsimlocal[1] = preciseHit->localPosition().y() - simHit.localPosition().y();
+                      
+                      const Matrix<double, 2, 1> dyrecsimeig = v.transpose()*dyrecsimlocal;
+                      
+                      dxsimgen.push_back(dysimgeneig[0]);
+                      dysimgen.push_back(dysimgeneig[1]);
+                      
+                      dxrecsim.push_back(dyrecsimeig[0]);
+                      dyrecsim.push_back(dyrecsimeig[1]);
+                      
+                      simvalid = true;
+                      break;
+                    }
+                  }
+                  if (simvalid) {
+                    break;
+                  }
+                }
+                if (!simvalid) {
+                  dxsimgen.push_back(-99.);
+                  dysimgen.push_back(-99.);
+                  dxrecsim.push_back(-99.);
+                  dyrecsim.push_back(-99.);
+                }
+              }
+              
+              const Matrix<StripHitScalar, 2, 2> rot = v.transpose().cast<StripHitScalar>();
+              
+//               if (preciseHit->det()->subDetector() == GeomDetEnumerators::TEC)
+//               {
+//           //       TECDetId detid(det->geographicalId());
+//           //       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+//                 unsigned int side = trackerTopology->tecSide(preciseHit->det()->geographicalId());
+//                 unsigned int wheel = trackerTopology->tecWheel(preciseHit->det()->geographicalId());
+//                 int layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
+//                 bool isStereo = trackerTopology->isStereo(preciseHit->det()->geographicalId());
+//                 
+// //                 const GluedGeomDet* gluedDet = dynamic_cast<const GluedGeomDet *>(preciseHit->det());
+// //                 
+// //                 std::cout << "tec layer " << layer << " stereo " << isStereo << std::endl;
+// //                 std::cout << "surface position:" << std::endl;
+// //                 std::cout << preciseHit->surface()->toGlobal(LocalPoint(0.,0.)) << std::endl;
+// //                 std::cout << "glued det: " << gluedDet << std::endl;
+// //                 std::cout << preciseHit->det()->monoDet() << std::endl;
+// //                 std::cout << preciseHit->det()->stereoDet() << std::endl;
+//                 
+// //                 std::cout << "local x to global: " << preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)) << std::endl;
+// //                 std::cout << "local y to global: " << preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)) << std::endl;
+// //                 std::cout << "local z to global: " << preciseHit->surface()->toGlobal(LocalVector(0.,0.,1.)) << std::endl;
+//                 
+//                 
+// //                 double dxt = v.col(0).transpose()*dy0local;
+//                 double dxt = dy0eig[0];
+//                 
+// //                 double dxt = -99.;
+// //                 
+// //  
+// //                 const StripGeomDetUnit* sgu = static_cast<const StripGeomDetUnit*>(preciseHit->det());
+// //                 const TkRadialStripTopology *topol = dynamic_cast<const TkRadialStripTopology*>(&sgu->specificType().specificTopology());
+// //                 
+// //                 if (topol) {                  
+// //                   
+// //                   const double lx = preciseHit->localPosition().x();
+// //                   const double ly = topol->yDistanceToIntersection(preciseHit->localPosition().y());
+// //                   const double phi =  std::atan(lx/ly);
+// //                   
+// //                   dxt = std::cos(phi)*dy0local[0] + std::sin(phi)*dy0local[1];
+// //                 }
+//                 
+// //                 const TrajectoryStateOnSurface updtsosnomat = fPropagator->geometricalPropagator().propagate(refFts, *preciseHit->surface());
+//                 
+//                 
+//                 double dxtsimgen = -99.;
+//                 double dytsimgen = -99.;
+//                 double dxtrecsim = -99.;
+//                 
+//                 
+// //                 if (preciseHit->geographicalId().rawId()==470098246) {
+// //                   std::cout << "Surface position in global" << std::endl;
+// //                   std::cout << preciseHit->surface()->position() << std::endl;
+// //                   std::cout << "local x to global:" << std::endl;
+// //                   std::cout << preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)) << std::endl;
+// //                   std::cout << "local y to global:" << std::endl;
+// //                   std::cout << preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)) << std::endl;
+// //                   std::cout << "local z to global:" << std::endl;
+// //                   std::cout << preciseHit->surface()->toGlobal(LocalVector(0.,0.,1.)) << std::endl;
+// //                 }
+//                 
+//                 if (doSim_) {
+// //                 if (doSim_ && preciseHit->geographicalId().rawId()==470098246) {
+//                   for (const PSimHit& simHit : *tecSimHits) {
+//                     if (simHit.detUnitId() == preciseHit->geographicalId()) {
+//                       
+//                       
+// //                       const double zs = preciseHit->surface()->position().z();
+// //                       
+// //                       const Vector3d M0(genpart->vertex().x(),
+// //                                               genpart->vertex().y(),
+// //                                               genpart->vertex().z());
+// //                       
+// //                       const Vector3d P0(genpart->momentum().x(),
+// //                                               genpart->momentum().y(),
+// //                                               genpart->momentum().z());
+// //                       
+// //                       const Vector3d T0 = P0.normalized();
+// //                       
+// //                       const Vector3d H(0.,0.,1.);
+// //                       
+// //                       const double s = (zs - M0[2])/T0[2];
+// //                       
+// //                       const Vector3d HcrossT = H.cross(T0);
+// //                       const double alpha = HcrossT.norm();
+// //                       const Vector3d N0 = HcrossT.normalized();
+// //                       
+// //                       const double gamma = T0[2];
+// //                       const double q = genpart->charge();
+// //                       const double Q = -3.8*2.99792458e-3*q/P0.norm();
+// //                       const double theta = Q*s;
+// //                       
+// //                       const Vector3d M = M0 + gamma*(theta-std::sin(theta))/Q*H + std::sin(theta)/Q*T0 + alpha*(1.-std::cos(theta))/Q*N0;
+// //                       
+// //                       const Vector3d Mprop(updtsosnomat.globalPosition().x(),
+// //                                            updtsosnomat.globalPosition().y(),
+// //                                            updtsosnomat.globalPosition().z());
+// //                       
+// //                       const LocalPoint localExpected = preciseHit->surface()->toLocal(GlobalPoint(M[0],M[1],M[2]));
+//                       
+// //                       std::cout << "gen charge: " << genpart->charge() << std::endl;
+// //                       std::cout << "by hand solution:" << std::endl;
+// //                       std::cout << M << std::endl;
+// //                       std::cout << "propagator solution:" << std::endl;
+// //                       std::cout << Mprop << std::endl;
+// //                       std::cout << "delta" << std::endl;
+// //                       std::cout << Mprop - M << std::endl;
+// //                       std::cout << "localExpected" << std::endl;
+// //                       printf("%9e, %9e\n", localExpected.x(), localExpected.y());
+//                       
+//                       simlocalxref = simHit.localPosition().x();
+//                       simlocalyref = simHit.localPosition().y();
+//                       
+// //                       std::cout << s << std::endl;
+//                       
+// //                       std::cout << "entry point global" << std::endl;
+// //                       std::cout << preciseHit->surface()->toGlobal(simHit.entryPoint()) << std::endl;
+// //                       std::cout << "position global" << std::endl;
+// //                       std::cout << preciseHit->surface()->toGlobal(simHit.localPosition()) << std::endl;
+// //                       std::cout << "exit point global" << std::endl;
+// //                       std::cout << preciseHit->surface()->toGlobal(simHit.exitPoint()) << std::endl;
+// //                       
+// //                       const GlobalPoint simPos = preciseHit->surface()->toGlobal(simHit.entryPoint());
+// //                       const GlobalVector simMom = preciseHit->surface()->toGlobal(simHit.momentumAtEntry());
+// //                       const FreeTrajectoryState simFts(simPos, simMom, genpart->charge(), field);
+// //                       
+// //                       const TrajectoryStateOnSurface simtsos = fPropagator->geometricalPropagator().propagate(simFts, *preciseHit->surface());
+// //                       
+// //                       if (!simtsos.isValid()) {
+// //                         break;
+// //                       }
+// //                       
+// // //                       std::cout << "delta local position (simtsos - simhit)" << std::endl;
+// //                       std::cout << simtsos.localPosition() - simHit.localPosition();
+//                       
+// 
+//   //                     std::cout << "found matched tec simhit" << std::endl;
+//                       
+//   //                     std::cout << simHit
+//   //                     std::cout << "updtsos global" << std::endl;
+//                       
+//   //                     std::cout << "sim-gen /*global*/" << std::endl;
+//                       
+//                       
+//                       
+//                       Matrix<double, 2, 1> dy0localsimgen;
+//                       dy0localsimgen[0] = simHit.localPosition().x() -  updtsos.localPosition().x();
+//                       dy0localsimgen[1] = simHit.localPosition().y() -  updtsos.localPosition().y();
+// //                       dy0localsimgen[0] = simHit.localPosition().x() -  updtsosnomat.localPosition().x();
+// //                       dy0localsimgen[1] = simHit.localPosition().y() -  updtsosnomat.localPosition().y();
+//   //                     dy0localsimgen[0] = simHit.entryPoint().x() -  updtsos.localPosition().x();
+//   //                     dy0localsimgen[1] = simHit.entryPoint().y() -  updtsos.localPosition().y();
+//   //                     dy0localsimgen[0] = simHit.exitPoint().x() -  updtsos.localPosition().x();
+//   //                     dy0localsimgen[1] = simHit.exitPoint().y() -  updtsos.localPosition().y();
+// //                       dy0localsimgen[0] = simtsos.localPosition().x() -  updtsos.localPosition().x();
+// //                       dy0localsimgen[1] = simtsos.localPosition().y() -  updtsos.localPosition().y();
+//   //                     
+// 
+// //                       const GlobalPoint simGlobal = preciseHit->surface()->toGlobal(simHit.localPosition());
+// //                       TSCBLBuilderWithPropagator tscblbuilder(fPropagator->geometricalPropagator());
+// //                       const reco::BeamSpot simbs(reco::BeamSpot::Point(simGlobal), 0., 0., 0., 0., reco::BeamSpot::CovarianceMatrix());
+// //                       const TrajectoryStateClosestToBeamLine tscbl = tscblbuilder(refFts, simbs);
+// // //                       dxtsimgen = tscbl.transverseImpactParameter().value();
+// //                       
+// //                       dy0localsimgen[0] = (simGlobal - tscbl.trackStateAtPCA().position()).dot(preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)));         
+// //                       dy0localsimgen[1] = (simGlobal - tscbl.trackStateAtPCA().position()).dot(preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)));
+// 
+// //                       TSCPBuilderNoMaterial tscpbuilder;
+// //                       const TrajectoryStateClosestToPoint tscp = tscpbuilder(refFts, simGlobal);
+// // //                       dxtsimgen = tscp.perigeeParameters().transverseImpactParameter();
+// // //                       dytsimgen = tscp.perigeeParameters().longitudinalImpactParameter();
+// // //                       dxtsimgen = (pcastate.position() - simGlobal).mag();
+// //                       dy0localsimgen[0] = (simGlobal - tscp.position()).dot(preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)));         
+// //                       dy0localsimgen[1] = (simGlobal - tscp.position()).dot(preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)));
+//                       
+//                       const Matrix<double, 2, 1> dy0eigsimgen = v.transpose()*dy0localsimgen;
+//                       
+//                       dxtsimgen = dy0eigsimgen[0];
+//                       dytsimgen = dy0eigsimgen[1];
+//                     
+// 
+//   //                     const FreeTrajectoryState pcastate = fPropagator->geometricalPropagator().propagateWithPath(refFts, simGlobal).first;  
+//   //                     TSCPBuilderNoMaterial tscpbuilder;
+//   //                     const TrajectoryStateClosestToPoint tscp = tscpbuilder(refFts, simGlobal);
+//   //                     dxtsimgen = tscp.perigeeParameters().transverseImpactParameter();
+//   //                     dytsimgen = tscp.perigeeParameters().longitudinalImpactParameter();
+//   //                     dxtsimgen = (pcastate.position() - simGlobal).mag();
+//                       
+// 
+//                       
+//                       Matrix<double, 2, 1> dy0localrecsim;
+//                       dy0localrecsim[0] = preciseHit->localPosition().x() - simHit.localPosition().x();
+//                       dy0localrecsim[1] = preciseHit->localPosition().y() - simHit.localPosition().y();
+//                       
+//                       const Matrix<double, 2, 1> dy0eigrecsim = v.transpose()*dy0localrecsim;
+//                       
+//                       dxtrecsim = dy0eigrecsim[0];
+//                       
+//   //                     if (std::abs(layer) == 4 && !isStereo) {
+//   //                       std::cout << "simhit entry" << std::endl;
+//   //                       std::cout << simHit.entryPoint() << std::endl;
+//   //                       std::cout << "simhit exit" << std::endl;
+//   //                       std::cout << simHit.exitPoint() << std::endl;
+//   //                       std::cout << "simhit exit-entry" << std::endl;
+//   //                       std::cout << simHit.exitPoint() - simHit.entryPoint() << std::endl;
+//   //                     }
+//                       break;
+//                     }
+//                   }
+//                 }
+                
+//                 if (std::abs(layer) == 4 && isStereo) {
+//                   dxttec4stereo = dxt;
+//                 }
+//                 else if (std::abs(layer) == 4 && !isStereo) {
+// //                   std::cout << "tec 4 rphi detid: " << preciseHit->geographicalId().rawId() << std::endl;
+//                   dxttec4rphi = dxt;
+//                   dxttec4rphisimgen = dxtsimgen;
+//                   dyttec4rphisimgen = dytsimgen;
+//                   dxttec4rphirecsim = dxtrecsim;
+//                 }
+//                 else if (std::abs(layer) == 9 && isStereo) {
+//                   dxttec9stereo = dxt;
+//                 }
+//                 else if (std::abs(layer) == 9 && !isStereo) {
+//                   dxttec9rphi = dxt;
+//                   dxttec9rphisimgen = dxtsimgen;
+//                   dyttec9rphisimgen = dytsimgen;
+//                 }
+// 
+//               }
+
+              
+              // smaller eigenvalue only
+//               SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
+// //               std::cout << "strip eigenvalues" << std::endl;
+// //               std::cout << eigensolver.eigenvalues() << std::endl;
+// //               std::cout << "strip eigenvectors" << std::endl;
+// //               std::cout << eigensolver.eigenvectors() << std::endl;
+//               
+//               StripHit2DCovariance Vinv = StripHit2DCovariance::Zero();
+//               Vinv(0,0) = StripHitScalar(1./eigensolver.eigenvalues()[0]);
+//               
+//               Matrix<double, 2, 1> dy0local;
+//               dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
+//               dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
+//               
+//               const Matrix<double, 2, 1> dy0eig = eigensolver.eigenvectors().transpose()*dy0local;
+//               
+//               StripHitVector dy0 = StripHitVector::Zero();
+//               dy0[0] = StripHitScalar(dy0eig[0]);
+// 
+//               const Matrix<StripHitScalar, 2, 2> rot = eigensolver.eigenvectors().transpose().cast<StripHitScalar>();
+// 
+//               
+//               const StripGeomDetUnit* sgu = static_cast<const StripGeomDetUnit*>(preciseHit->det());
+//               const TkRadialStripTopology *topol = dynamic_cast<const TkRadialStripTopology*>(&sgu->specificType().specificTopology());
+//               
+//               if (topol) {
+//                 std::cout << "yCentreOfStripPlane " << topol->yCentreOfStripPlane() << std::endl;
+//                 std::cout << "originToIntersection " << topol->originToIntersection() << std::endl;
+//                 std::cout << "yExtentOfStripPlane " << topol->yExtentOfStripPlane() << std::endl;
+//                 std::cout << "phiOfOneEdge " << topol->phiOfOneEdge() << std::endl;
+//                 
+//                 
+// //                 const double lx = preciseHit->localPosition().x();
+// //                 const double ly = topol->yDistanceToIntersection(preciseHit->localPosition().y());
+// //                 const double phi =  std::atan(lx/ly);
+// //                 std::cout << "cosphi: " << std::cos(phi) << " sinphi: " << std::sin(phi) << std::endl;
+// //                 std::cout << "eigenvector 0" << std::endl;
+// //                 std::cout << eigensolver.eigenvectors().col(0) << std::endl;
+//               }
+              
+              // measurement perpendicular to strip only
+              // based on "The Inverse Problem" from CMS TN-1995/170
+//               const double q = 2.*iV(0,1)/(iV(0,0)-iV(1,1));
+//               const double tanalpha = q/(1.+std::sqrt(1.+q*q));
+//               const double sigl2 = 0.5*(iV.trace() + std::sqrt(std::pow(iV(0,0) - iV(1,1), 2) + 4.*iV(0,1)*iV(0,1)));
+//               const double sigp2 = iV.determinant()/sigl2;
+//               
+//               const double cosalpha = 1./std::sqrt(1. + tanalpha*tanalpha);
+//               const double sinalpha = tanalpha*cosalpha;
+//               
+//               // rotation matrix from local coordinates to components perpendicular and parallel to strip
+//               Matrix2d Rinv;
+//               Rinv << cosalpha, sinalpha,
+//                       -sinalpha, cosalpha;
+//                       
+//               Matrix<double, 2, 1> dy0local;
+//               dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
+//               dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
+//               
+//               const Matrix<double, 2, 1> dy0strip = Rinv*dy0local;
+//               
+//               StripHit2DCovariance Vinv = StripHit2DCovariance::Zero();
+//               Vinv(0,0) = StripHitScalar(1./sigp2);
+//               
+//               StripHitVector dy0 = StripHitVector::Zero();
+//               dy0[0] = StripHitScalar(dy0strip[0]);
+// 
+//               const Matrix<StripHitScalar, 2, 2> rot = Rinv.cast<StripHitScalar>();
+              
+//               std::cout << "cosalpha " << cosalpha << std::endl;
+//               std::cout << "sinalpha " << sinalpha << std::endl;
+//               std::cout << "sigl2 " << sigl2 << std::endl;
+//               std::cout << "sigp2 " << sigp2 << std::endl;
+//               std::cout << "dy0local" << std::endl;
+//               std::cout << dy0local << std::endl;
+//               std::cout << "dy0strip" << std::endl;
+//               std::cout << dy0strip << std::endl;
               
               StripHitVector dx = StripHitVector::Zero();
               StripHitScalar dbeta(0.);
@@ -1571,7 +2279,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               
 //               const StripHit2DJacobian H = jacheig.bottomRightCorner<2,2>().cast<StripHitScalar>();
 
-              StripHitVector dh = dy0 - dx - A*dalpha;
+//               StripHitScalar qhit(updtsos.charge());
+              
+              StripHitVector dh = dy0 - rot*dx - A*dalpha;
               StripHitScalar chisq = dh.transpose()*Vinv*dh;
 
               auto const& gradlocal = chisq.value().derivatives();
@@ -1594,6 +2304,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
               alignmentparmidx++;
               
+              hitidxv.push_back(xglobalidx);
             }
           }
         }
@@ -1605,6 +2316,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       //fake constraint on reference point parameters
       if (dogen) {
+//       if (false) {
         for (unsigned int i=0; i<5; ++i) {
           gradfull[i] = 0.;
           hessfull.row(i) *= 0.;
@@ -1881,16 +2593,107 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 }
 
 // ------------ method called once each job just before starting event loop  ------------
-void ResidualGlobalCorrectionMaker::beginJob()
+void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
 {
+  std::stringstream filenamestream;
+  filenamestream << "globalcor_" << streamid.value() << ".root";
+  fout = new TFile(filenamestream.str().c_str(), "RECREATE");
+  
+//   runtree = new TTree("runtree","");
+//   gradtree = fs->make<TTree>("gradtree","");
+//   hesstree = fs->make<TTree>("hesstree","");
+  
+  
+  if (fillTrackTree_) {
+    tree = new TTree("tree","");
+    const int basketSize = 4*1024*1024;
+    tree->SetAutoFlush(0);
+    
+    tree->Branch("trackPt", &trackPt, basketSize);
+    tree->Branch("trackPtErr", &trackPtErr, basketSize);
+    tree->Branch("trackEta", &trackEta, basketSize);
+    tree->Branch("trackPhi", &trackPhi, basketSize);
+    tree->Branch("trackCharge", &trackCharge, basketSize);
+    //workaround for older ROOT version inability to store std::array automatically
+  //   tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
+  //   tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
+    tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
+    tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
+    
+    tree->Branch("refParms_iter0", refParms_iter0.data(), "refParms_iter0[5]/F", basketSize);
+    tree->Branch("refCov_iter0", refCov_iter0.data(), "refCov_iter0[25]/F", basketSize);
+  //   tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
+  //   tree->Branch("refCov_iter2", refCov_iter2.data(), "refCov_iter2[25]/F", basketSize);  
+    
+    tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
+    tree->Branch("refCov", refCov.data(), "refCov[25]/F", basketSize);
+    tree->Branch("genParms", genParms.data(), "genParms[5]/F", basketSize);
+
+    tree->Branch("genPt", &genPt, basketSize);
+    tree->Branch("genEta", &genEta, basketSize);
+    tree->Branch("genPhi", &genPhi, basketSize);
+    tree->Branch("genCharge", &genCharge, basketSize);
+    
+    tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
+    
+    tree->Branch("nHits", &nHits, basketSize);
+    tree->Branch("nValidHits", &nValidHits, basketSize);
+    tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
+    tree->Branch("nParms", &nParms, basketSize);
+    tree->Branch("nJacRef", &nJacRef, basketSize);
+    
+  //   tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
+    tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
+    tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
+    
+  //   tree->Branch("nSym", &nSym, basketSize);
+    
+  //   tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+    
+    tree->Branch("run", &run);
+    tree->Branch("lumi", &lumi);
+    tree->Branch("event", &event);
+    
+    tree->Branch("gradmax", &gradmax);
+    tree->Branch("hessmax", &hessmax);
+    
+//     tree->Branch("dxpxb1", &dxpxb1);
+//     tree->Branch("dypxb1", &dypxb1);
+//     
+//     tree->Branch("dxttec9rphi", &dxttec9rphi);
+//     tree->Branch("dxttec9stereo", &dxttec9stereo);
+//     
+//     tree->Branch("dxttec4rphi", &dxttec4rphi);
+//     tree->Branch("dxttec4stereo", &dxttec4stereo);
+//     
+//     tree->Branch("dxttec4rphisimgen", &dxttec4rphisimgen);
+//     tree->Branch("dyttec4rphisimgen", &dyttec4rphisimgen);
+//     tree->Branch("dxttec4rphirecsim", &dxttec4rphirecsim);
+//     
+//     tree->Branch("dxttec9rphisimgen", &dxttec9rphisimgen);
+//     tree->Branch("dyttec9rphisimgen", &dyttec9rphisimgen);
+//     
+//     tree->Branch("simlocalxref", &simlocalxref);
+//     tree->Branch("simlocalyref", &simlocalyref);
+    
+    tree->Branch("hitidxv", &hitidxv);
+    tree->Branch("dxrecgen", &dxrecgen);
+    tree->Branch("dyrecgen", &dyrecgen);
+    tree->Branch("dxsimgen", &dxsimgen);
+    tree->Branch("dysimgen", &dysimgen);
+    tree->Branch("dxrecsim", &dxrecsim);
+    tree->Branch("dyrecsim", &dyrecsim);
+    
+  }
+
 }
 
 // ------------ method called once each job just after ending the event loop  ------------
-void ResidualGlobalCorrectionMaker::endJob()
+void ResidualGlobalCorrectionMaker::endStream()
 {
-//   fout->cd();
+  fout->cd();
   
-//   TTree *gradtree = new TTree("gradtree","");
+  TTree *gradtree = new TTree("gradtree","");
   unsigned int idx;
   double gradval;
   gradtree->Branch("idx",&idx);
@@ -1901,7 +2704,7 @@ void ResidualGlobalCorrectionMaker::endJob()
     gradtree->Fill();
   }
   
-//   TTree *hesstree = new TTree("hesstree","");
+  TTree *hesstree = new TTree("hesstree","");
   unsigned int iidx;
   unsigned int jidx;
   double hessval;
@@ -1916,8 +2719,8 @@ void ResidualGlobalCorrectionMaker::endJob()
     hesstree->Fill();
   }
   
-//   fout->Write();
-//   fout->Close();
+  fout->Write();
+  fout->Close();
 }
 
 // ------------ method called when starting to processes a run  ------------
@@ -1925,6 +2728,10 @@ void ResidualGlobalCorrectionMaker::endJob()
 void 
 ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup const& es)
 {
+  if (detidparms.size()>0) {
+    return;
+  }
+  
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
   
@@ -1952,13 +2759,15 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
   }
   
 //   TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
-//   TTree *runtree = new TTree("tree", "tree");
+  fout->cd();
+  TTree *runtree = new TTree("runtree", "");
   
   unsigned int iidx;
   int parmtype;
   unsigned int rawdetid;
   int subdet;
   int layer;
+  int stereo;
   float x;
   float y;
   float z;
@@ -1972,6 +2781,7 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
   runtree->Branch("rawdetid", &rawdetid);
   runtree->Branch("subdet", &subdet);
   runtree->Branch("layer", &layer);
+  runtree->Branch("stereo", &stereo);
   runtree->Branch("x", &x);
   runtree->Branch("y", &y);
   runtree->Branch("z", &z);
@@ -1988,6 +2798,7 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
     const GeomDet* det = globalGeometry->idToDet(detid);
     
     layer = 0;
+    stereo = 0;
 //     int subdet = det->subDetector();
 //     float eta = det->surface().position().eta();
 
@@ -2006,18 +2817,21 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
 //       TIBDetId detid(det->geographicalId());
 //       layer = detid.layer();
       layer = trackerTopology->tibLayer(det->geographicalId());
+      stereo = trackerTopology->isStereo(det->geographicalId());
     }
     else if (det->subDetector() == GeomDetEnumerators::TOB)
     {
 //       TOBDetId detid(det->geographicalId());
 //       layer = detid.layer();
       layer = trackerTopology->tobLayer(det->geographicalId());
+      stereo = trackerTopology->isStereo(det->geographicalId());
     }
     else if (det->subDetector() == GeomDetEnumerators::TID)
     {
       unsigned int side = trackerTopology->tidSide(detid);
       unsigned int wheel = trackerTopology->tidWheel(detid);
       layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
+      stereo = trackerTopology->isStereo(det->geographicalId());
 
     }
     else if (det->subDetector() == GeomDetEnumerators::TEC)
@@ -2027,6 +2841,7 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
       unsigned int side = trackerTopology->tecSide(detid);
       unsigned int wheel = trackerTopology->tecWheel(detid);
       layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
+      stereo = trackerTopology->isStereo(det->geographicalId());
     }
     
 //     ParmInfo parminfo;
@@ -2762,6 +3577,97 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::curv2localTransportJacobian(
                                                 
 }
 
+AlgebraicVector5 ResidualGlobalCorrectionMaker::localMSConvolution(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const {
+  
+  const LocalVector lx(1.,0.,0.);
+  const LocalVector ly(0.,1.,0.);
+  const GlobalVector J = tsos.surface().toGlobal(lx);
+  const GlobalVector K = tsos.surface().toGlobal(ly);
+    
+  const double Jx = J.x();
+  const double Jy = J.y();
+  const double Jz = J.z();
+  
+  const double Kx = K.x();
+  const double Ky = K.y();
+  const double Kz = K.z();
+  
+  const Matrix<double, 3, 1> p0(tsos.globalMomentum().x(), tsos.globalMomentum().y(), tsos.globalMomentum().z());
+  const Matrix<double, 3, 1> W0 = p0.normalized();
+  const Matrix<double, 3, 1> zhat(0., 0., 1.);
+  
+  const Matrix<double, 3, 1> U0 = zhat.cross(W0).normalized();
+  const Matrix<double, 3, 1> V0 = W0.cross(U0);
+    
+  const double Ux = U0[0];
+  const double Uy = U0[1];
+  
+  const double Vx = V0[0];
+  const double Vy = V0[1];
+  
+  const double Wx = W0.x();
+  const double Wy = W0.y();
+  const double Wz = W0.z();
+  
+  const double x0 = std::pow(Wx, 2) + std::pow(Wy, 2) + std::pow(Wz, 2);
+  const double x1 = std::pow(x0, -1.0/2.0);
+  const double x2 = Ux*Wx + Uy*Wy;
+  const double x3 = 1.0/x0;
+  const double x4 = 2*x3;
+  const double x5 = x2*x4;
+  const double x6 = 3*x3;
+  const double x7 = std::pow(Ux, 2) + std::pow(Uy, 2) - std::pow(x2, 2)*x6;
+  const double x8 = x3*(Jx*Wx + Jy*Wy + Jz*Wz);
+  const double x9 = Vx*Wx + Vy*Wy;
+  const double x10 = x4*x9;
+  const double x11 = std::pow(Vx, 2) + std::pow(Vy, 2) - x6*std::pow(x9, 2);
+  const double x12 = x3*(Kx*Wx + Ky*Wy + Kz*Wz);
+  const double d2dxdzdthetau2 = x1*(-x5*(Jx*Ux + Jy*Uy) - x7*x8);
+  const double d2dxdzdthetav2 = x1*(-x10*(Jx*Vx + Jy*Vy) - x11*x8);
+  const double d2dydzdthetau2 = x1*(-x12*x7 - x5*(Kx*Ux + Ky*Uy));
+  const double d2dydzdthetav2 = x1*(-x10*(Kx*Vx + Ky*Vy) - x11*x12);
+
+  
+  
+  const Surface& surface = tsos.surface();
+  //
+  //
+  // Now get information on medium
+  //
+  const MediumProperties& mp = surface.mediumProperties();
+
+  // Momentum vector
+  LocalVector d = tsos.localMomentum();
+  float p2 = d.mag2();
+  d *= 1.f / sqrt(p2);
+  float xf = 1.f / std::abs(d.z());  // increase of path due to angle of incidence
+  // calculate general physics things
+  constexpr float amscon = 1.8496e-4;  // (13.6MeV)**2
+  const float m2 = updator.mass() * updator.mass();    // use mass hypothesis from constructor
+  float e2 = p2 + m2;
+  float beta2 = p2 / e2;
+  // calculate the multiple scattering angle
+  float radLen = mp.radLen() * xf;  // effective rad. length
+  float sigt2 = 0.;                 // sigma(alpha)**2
+
+  // Calculated rms scattering angle squared.
+  float fact = 1.f + 0.038f * unsafe_logf<2>(radLen);
+  fact *= fact;
+  float a = fact / (beta2 * p2);
+  sigt2 = amscon * radLen * a;
+  
+  const double sigma2 = sigt2;
+  
+  AlgebraicVector5 res;
+  res[0] = 0.;
+  res[1] = 0.5*d2dxdzdthetau2*sigma2 + 0.5*d2dxdzdthetav2*sigma2;
+  res[2] = 0.5*d2dydzdthetau2*sigma2 + 0.5*d2dydzdthetav2*sigma2;
+  res[3] = 0.;
+  res[4] = 0.;
+
+  return res;
+}
+
 Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) {
   
   //jacobian of local parameters with respect to initial local parameters and material parameter xi
@@ -3070,6 +3976,370 @@ std::array<Matrix<double, 5, 5>, 5> ResidualGlobalCorrectionMaker::processNoiseJ
   dQdradLen(2,2) = dmsyydradLen;
   
   return res;
+}
+
+Matrix<double, 2, 1> ResidualGlobalCorrectionMaker::localPositionConvolution(const TrajectoryStateOnSurface& tsos) const {
+  
+  // curvilinear parameters
+  const CurvilinearTrajectoryParameters curv(tsos.globalPosition(), tsos.globalMomentum(), tsos.charge());
+  const double qop = curv.Qbp();
+  const double lam = curv.lambda();
+  const double phi = curv.phi();
+//   const double xt = curv.xT();
+//   const double yt = curv.yT();
+  const double xt = 0.;
+  const double yt = 0.;
+  
+  const Matrix<double, 3, 1> p0(tsos.globalMomentum().x(), tsos.globalMomentum().y(), tsos.globalMomentum().z());
+  const Matrix<double, 3, 1> W0 = p0.normalized();
+  const Matrix<double, 3, 1> zhat(0., 0., 1.);
+  
+  const Matrix<double, 3, 1> U0 = zhat.cross(W0).normalized();
+  const Matrix<double, 3, 1> V0 = W0.cross(U0);
+  
+//   const Matrix<double, 3, 1> x0alt = xt*U0 + yt*V0;
+//   std::cout << "global pos" << std::endl;
+//   std::cout << tsos.globalPosition() << std::endl;
+//   std::cout << "x0alt" << std::endl;
+//   std::cout << x0alt << std::endl;
+//   std::cout << "xt" << std::endl;
+//   std::cout << xt << std::endl;
+//   std::cout << "yt" << std::endl;
+//   std::cout << yt << std::endl;
+  
+  const LocalVector lx(1.,0.,0.);
+  const LocalVector ly(0.,1.,0.);
+  const LocalVector lz(0.,0.,1.);
+  const GlobalVector I = tsos.surface().toGlobal(lz);
+  const GlobalVector J = tsos.surface().toGlobal(lx);
+  const GlobalVector K = tsos.surface().toGlobal(ly);
+  
+  const LocalPoint l0(0., 0.);
+  const GlobalPoint r = tsos.surface().toGlobal(l0);
+  
+  const double Ux = U0[0];
+  const double Uy = U0[1];
+//   const double Uz = U0[2];
+  
+  const double Vx = V0[0];
+  const double Vy = V0[1];
+//   const double Vz = V0[2];
+  
+  const double Ix = I.x();
+  const double Iy = I.y();
+  const double Iz = I.z();
+  
+  const double Jx = J.x();
+  const double Jy = J.y();
+  const double Jz = J.z();
+  
+  const double Kx = K.x();
+  const double Ky = K.y();
+  const double Kz = K.z();
+  
+  const double rx = r.x();
+  const double ry = r.y();
+  const double rz = r.z();
+  
+  const double pos0x = tsos.globalPosition().x();
+  const double pos0y = tsos.globalPosition().y();
+  const double pos0z = tsos.globalPosition().z();
+  
+  //sympy stuff goes here
+  const double x0 = std::sin(lam);
+  const double x1 = Iz*x0;
+  const double x2 = std::cos(lam);
+  const double x3 = std::cos(phi);
+  const double x4 = Ix*x3;
+  const double x5 = x2*x4;
+  const double x6 = std::sin(phi);
+  const double x7 = Iy*x6;
+  const double x8 = x2*x7;
+  const double x9 = x5 + x8;
+  const double x10 = x1 + x9;
+  const double x11 = 1.0/x10;
+  const double x12 = Ix*rx;
+  const double x13 = Iy*ry;
+  const double x14 = Iz*rz;
+  const double x15 = Ix*pos0x;
+  const double x16 = Iy*pos0y;
+  const double x17 = Iz*pos0z;
+  const double x18 = Ux*xt;
+  const double x19 = Ix*x18;
+  const double x20 = Vx*yt;
+  const double x21 = Ix*x20;
+  const double x22 = Uy*xt;
+  const double x23 = Iy*x22;
+  const double x24 = Vy*yt;
+  const double x25 = Iy*x24;
+  const double x26 = x12 + x13 + x14 - x15 - x16 - x17 - x19 - x21 - x23 - x25;
+  const double x27 = Iz*x2;
+  const double x28 = x0*x4;
+  const double x29 = x0*x7;
+  const double x30 = x27 - x28 - x29;
+  const double x31 = x2*x26;
+  const double x32 = pos0z*x30 + x31;
+  const double x33 = Jz*x11;
+  const double x34 = pos0x + x18 + x20;
+  const double x35 = x0*x26;
+  const double x36 = -x3*x35 + x30*x34;
+  const double x37 = Jx*x11;
+  const double x38 = pos0y + x22 + x24;
+  const double x39 = x30*x38 - x35*x6;
+  const double x40 = Jy*x11;
+  const double x41 = std::pow(x10, -2);
+  const double x42 = -x27 + x28 + x29;
+  const double x43 = x41*x42;
+  const double x44 = pos0z*x10 + x35;
+  const double x45 = Jz*x44;
+  const double x46 = x3*x31;
+  const double x47 = x10*x34 + x46;
+  const double x48 = Jx*x47;
+  const double x49 = x31*x6;
+  const double x50 = x10*x38 + x49;
+  const double x51 = Jy*x43;
+  const double x52 = -x5 - x8;
+  const double x53 = -x1 + x52;
+  const double x54 = pos0z*x53 - x35;
+  const double x55 = -x12 - x13 - x14 + x15 + x16 + x17 + x19 + x21 + x23 + x25;
+  const double x56 = x2*x55;
+  const double x57 = x3*x56;
+  const double x58 = x34*x53 + x57;
+  const double x59 = x38*x53 + x56*x6;
+  const double x60 = Jz*x43;
+  const double x61 = 2*x32;
+  const double x62 = Jx*x43;
+  const double x63 = 2*x36;
+  const double x64 = 2*x39;
+  const double x65 = std::pow(x10, -3);
+  const double x66 = x42*x65;
+  const double x67 = x66*(-2*x27 + 2*x28 + 2*x29);
+  const double x68 = Jy*x50;
+  const double x69 = x0*x6;
+  const double x70 = Ix*x69;
+  const double x71 = x0*x3;
+  const double x72 = Iy*x71;
+  const double x73 = x70 - x72;
+  const double x74 = pos0z*x33;
+  const double x75 = x2*x3;
+  const double x76 = Iy*x75;
+  const double x77 = x2*x6;
+  const double x78 = Ix*x77;
+  const double x79 = x76 - x78;
+  const double x80 = pos0z*x79;
+  const double x81 = x38*x73 + x55*x71;
+  const double x82 = x34*x73 - x55*x69;
+  const double x83 = x41*(-x70 + x72);
+  const double x84 = -x76 + x78;
+  const double x85 = x41*x84;
+  const double x86 = x32*x85;
+  const double x87 = x38*x79 + x46;
+  const double x88 = -x49;
+  const double x89 = x34*x79 + x88;
+  const double x90 = Jx*x85;
+  const double x91 = Jy*x85;
+  const double x92 = -2*x76 + 2*x78;
+  const double x93 = x66*x92;
+  const double x94 = Ix*Ux;
+  const double x95 = Iy*Uy;
+  const double x96 = -x94 - x95;
+  const double x97 = x2*x33;
+  const double x98 = x0*x60;
+  const double x99 = x94 + x95;
+  const double x100 = Ux*x30 + x71*x99;
+  const double x101 = Uy*x30 + x69*x99;
+  const double x102 = x75*x96;
+  const double x103 = Ux*x10 + x102;
+  const double x104 = Uy*x10 + x77*x96;
+  const double x105 = Ix*Vx;
+  const double x106 = Iy*Vy;
+  const double x107 = -x105 - x106;
+  const double x108 = x105 + x106;
+  const double x109 = Vx*x30 + x108*x71;
+  const double x110 = Vy*x30 + x108*x69;
+  const double x111 = x107*x75;
+  const double x112 = Vx*x10 + x111;
+  const double x113 = Vy*x10 + x107*x77;
+  const double x114 = Jz*x85;
+  const double x115 = 2*x80;
+  const double x116 = x34*x52 + x57;
+  const double x117 = x38*x52 + x88;
+  const double x118 = x41*x9;
+  const double x119 = 2*x87;
+  const double x120 = 2*x89;
+  const double x121 = x65*x84*x92;
+  const double x122 = x0*x96;
+  const double x123 = Ux*x79 + x77*x99;
+  const double x124 = Uy*x79 + x102;
+  const double x125 = x0*x107;
+  const double x126 = Vx*x79 + x108*x77;
+  const double x127 = Vy*x79 + x111;
+  const double x128 = x0*x33;
+  const double x129 = Kz*x11;
+  const double x130 = Kx*x11;
+  const double x131 = Ky*x11;
+  const double x132 = Kz*x44;
+  const double x133 = Kx*x43;
+  const double x134 = Ky*x43;
+  const double x135 = Kz*x43;
+  const double x136 = Kx*x47;
+  const double x137 = Ky*x50;
+  const double x138 = pos0z*x129;
+  const double x139 = Kx*x85;
+  const double x140 = Ky*x85;
+  const double x141 = x129*x2;
+  const double x142 = Kz*x85;
+  const double x143 = x0*x129;
+  const double shat = x11*x26;
+  const double dvdqop = 0;
+  const double d2vdqopdqop = 0;
+  const double d2vdqopdlam = 0;
+  const double d2vdqopdphi = 0;
+  const double d2vdqopdxt = 0;
+  const double d2vdqopdyt = 0;
+  const double dvdlam = x32*x33 + x36*x37 + x39*x40 + x43*x45 + x43*x48 + x50*x51;
+  const double d2vdlamdlam = x33*x44 + x33*x54 + x37*x47 + x37*x58 + x40*x50 + x40*x59 + x45*x67 + x48*x67 + x51*x64 + x60*x61 + x62*x63 + x67*x68;
+  const double d2vdlamdphi = Jz*x86 + x36*x90 + x37*x82 + x39*x91 + x40*x81 + x45*x83 + x45*x93 + x48*x83 + x48*x93 + x51*x87 + x60*x80 + x62*x89 + x68*x83 + x68*x93 + x73*x74;
+  const double d2vdlamdxt = x100*x37 + x101*x40 + x103*x62 + x104*x51 + x96*x97 + x96*x98;
+  const double d2vdlamdyt = x107*x97 + x107*x98 + x109*x37 + x110*x40 + x112*x62 + x113*x51;
+  const double dvdphi = x37*x89 + x40*x87 + x45*x85 + x48*x85 + x50*x91 + x74*x79;
+  const double d2vdphidphi = x114*x115 + x116*x37 + x117*x40 + x118*x45 + x118*x48 + x118*x68 + x119*x91 + x120*x90 + x121*x45 + x121*x48 + x121*x68 + x52*x74;
+  const double d2vdphidxt = x103*x90 + x104*x91 + x114*x122 + x123*x37 + x124*x40;
+  const double d2vdphidyt = x112*x90 + x113*x91 + x114*x125 + x126*x37 + x127*x40;
+  const double dvdxt = x103*x37 + x104*x40 + x128*x96;
+  const double d2vdxtdxt = 0;
+  const double d2vdxtdyt = 0;
+  const double dvdyt = x107*x128 + x112*x37 + x113*x40;
+  const double d2vdytdyt = 0;
+  const double dwdqop = 0;
+  const double d2wdqopdqop = 0;
+  const double d2wdqopdlam = 0;
+  const double d2wdqopdphi = 0;
+  const double d2wdqopdxt = 0;
+  const double d2wdqopdyt = 0;
+  const double dwdlam = x129*x32 + x130*x36 + x131*x39 + x132*x43 + x133*x47 + x134*x50;
+  const double d2wdlamdlam = x129*x44 + x129*x54 + x130*x47 + x130*x58 + x131*x50 + x131*x59 + x132*x67 + x133*x63 + x134*x64 + x135*x61 + x136*x67 + x137*x67;
+  const double d2wdlamdphi = Kz*x86 + x130*x82 + x131*x81 + x132*x83 + x132*x93 + x133*x89 + x134*x87 + x135*x80 + x136*x83 + x136*x93 + x137*x83 + x137*x93 + x138*x73 + x139*x36 + x140*x39;
+  const double d2wdlamdxt = x100*x130 + x101*x131 + x103*x133 + x104*x134 + x122*x135 + x141*x96;
+  const double d2wdlamdyt = x107*x141 + x109*x130 + x110*x131 + x112*x133 + x113*x134 + x125*x135;
+  const double dwdphi = x130*x89 + x131*x87 + x132*x85 + x138*x79 + x139*x47 + x140*x50;
+  const double d2wdphidphi = x115*x142 + x116*x130 + x117*x131 + x118*x132 + x118*x136 + x118*x137 + x119*x140 + x120*x139 + x121*x132 + x121*x136 + x121*x137 + x138*x52;
+  const double d2wdphidxt = x103*x139 + x104*x140 + x122*x142 + x123*x130 + x124*x131;
+  const double d2wdphidyt = x112*x139 + x113*x140 + x125*x142 + x126*x130 + x127*x131;
+  const double dwdxt = x103*x130 + x104*x131 + x143*x96;
+  const double d2wdxtdxt = 0;
+  const double d2wdxtdyt = 0;
+  const double dwdyt = x107*x143 + x112*x130 + x113*x131;
+  const double d2wdytdyt = 0;
+  Matrix<double, 5, 5> d2vdx2;
+  d2vdx2(0, 0) = d2vdqopdqop;
+  d2vdx2(0, 1) = d2vdqopdlam;
+  d2vdx2(0, 2) = d2vdqopdphi;
+  d2vdx2(0, 3) = d2vdqopdxt;
+  d2vdx2(0, 4) = d2vdqopdyt;
+  d2vdx2(1, 0) = d2vdqopdlam;
+  d2vdx2(1, 1) = d2vdlamdlam;
+  d2vdx2(1, 2) = d2vdlamdphi;
+  d2vdx2(1, 3) = d2vdlamdxt;
+  d2vdx2(1, 4) = d2vdlamdyt;
+  d2vdx2(2, 0) = d2vdqopdphi;
+  d2vdx2(2, 1) = d2vdlamdphi;
+  d2vdx2(2, 2) = d2vdphidphi;
+  d2vdx2(2, 3) = d2vdphidxt;
+  d2vdx2(2, 4) = d2vdphidyt;
+  d2vdx2(3, 0) = d2vdqopdxt;
+  d2vdx2(3, 1) = d2vdlamdxt;
+  d2vdx2(3, 2) = d2vdphidxt;
+  d2vdx2(3, 3) = d2vdxtdxt;
+  d2vdx2(3, 4) = d2vdxtdyt;
+  d2vdx2(4, 0) = d2vdqopdyt;
+  d2vdx2(4, 1) = d2vdlamdyt;
+  d2vdx2(4, 2) = d2vdphidyt;
+  d2vdx2(4, 3) = d2vdxtdyt;
+  d2vdx2(4, 4) = d2vdytdyt;
+  Matrix<double, 5, 5> d2wdx2;
+  d2wdx2(0, 0) = d2wdqopdqop;
+  d2wdx2(0, 1) = d2wdqopdlam;
+  d2wdx2(0, 2) = d2wdqopdphi;
+  d2wdx2(0, 3) = d2wdqopdxt;
+  d2wdx2(0, 4) = d2wdqopdyt;
+  d2wdx2(1, 0) = d2wdqopdlam;
+  d2wdx2(1, 1) = d2wdlamdlam;
+  d2wdx2(1, 2) = d2wdlamdphi;
+  d2wdx2(1, 3) = d2wdlamdxt;
+  d2wdx2(1, 4) = d2wdlamdyt;
+  d2wdx2(2, 0) = d2wdqopdphi;
+  d2wdx2(2, 1) = d2wdlamdphi;
+  d2wdx2(2, 2) = d2wdphidphi;
+  d2wdx2(2, 3) = d2wdphidxt;
+  d2wdx2(2, 4) = d2wdphidyt;
+  d2wdx2(3, 0) = d2wdqopdxt;
+  d2wdx2(3, 1) = d2wdlamdxt;
+  d2wdx2(3, 2) = d2wdphidxt;
+  d2wdx2(3, 3) = d2wdxtdxt;
+  d2wdx2(3, 4) = d2wdxtdyt;
+  d2wdx2(4, 0) = d2wdqopdyt;
+  d2wdx2(4, 1) = d2wdlamdyt;
+  d2wdx2(4, 2) = d2wdphidyt;
+  d2wdx2(4, 3) = d2wdxtdyt;
+  d2wdx2(4, 4) = d2wdytdyt;
+  Matrix<double, 5, 1> dvdx;
+  dvdx[0] = dvdqop;
+  dvdx[1] = dvdlam;
+  dvdx[2] = dvdphi;
+  dvdx[3] = dvdxt;
+  dvdx[4] = dvdyt;
+  Matrix<double, 5, 1> dwdx;
+  dwdx[0] = dwdqop;
+  dwdx[1] = dwdlam;
+  dwdx[2] = dwdphi;
+  dwdx[3] = dwdxt;
+  dwdx[4] = dwdyt;
+
+
+  std::cout << "dvdx" << std::endl;
+  std::cout << dvdx << std::endl;
+  
+  std::cout << "dwdx" << std::endl;
+  std::cout << dwdx << std::endl;
+  
+  std::cout << "d2vdx2" << std::endl;
+  std::cout << d2vdx2 << std::endl;
+
+  std::cout << "d2wdx2" << std::endl;
+  std::cout << d2wdx2 << std::endl;
+  
+  std::cout << "shat" << std::endl;
+  std::cout << shat << std::endl;
+  
+  // covariance matrix in curvilinear parameters
+  const AlgebraicMatrix55 curvcovsmat = tsos.curvilinearError().matrix();
+  
+  // map to eigen data structure
+  const Map<const Matrix<double, 5, 5, RowMajor>> curvcov(curvcovsmat.Array());
+  
+  // compute eigendecomposition
+  SelfAdjointEigenSolver<Matrix<double, 5, 5>> es;
+  es.compute(curvcov);
+  
+  // cov = VDV^(-1)
+//   auto const& sqrtD = es.eigenvalues().cwiseSqrt();
+  auto const& D = es.eigenvalues();
+  auto const& V = es.eigenvectors();
+  
+  // compute second order correction to local positions
+//   Matrix<double, 2, 1> res;
+//   res[0] = 0.5*sqrtD.transpose()*V.transpose()*d2vdx2*V*sqrtD;
+//   res[1] = 0.5*sqrtD.transpose()*V.transpose()*d2wdx2*V*sqrtD;
+  
+  Matrix<double, 2, 1> res = Matrix<double, 2, 1>::Zero();
+  for (unsigned int i=0; i<5; ++i) {
+    res[0] += 0.5*D[i]*V.col(i).transpose()*d2vdx2*V.col(i);
+    res[1] += 0.5*D[i]*V.col(i).transpose()*d2wdx2*V.col(i);
+  }
+  
+  return res;
+  
 }
 
 template <unsigned int D>
