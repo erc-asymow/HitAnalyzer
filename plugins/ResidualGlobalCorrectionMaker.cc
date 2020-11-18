@@ -63,6 +63,9 @@
 #include "TrackingTools/PatternTools/interface/TSCBLBuilderWithPropagator.h"
 #include "DataFormats/TrackingRecHit/interface/InvalidTrackingRecHit.h"
 #include "DataFormats/GeometrySurface/interface/Cylinder.h"
+#include "TrackingTools/GeomPropagators/interface/HelixBarrelPlaneCrossingByCircle.h"
+#include "TrackingTools/GeomPropagators/interface/HelixArbitraryPlaneCrossing.h"
+
 
 #include "FWCore/ServiceRegistry/interface/Service.h"
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
@@ -315,6 +318,11 @@ private:
   float simlocalxref;
   float simlocalyref;
   
+  float simtestz;
+  float simtestzlocalref;
+  float simtestdx;
+  float simtestdxrec;
+  
 //   bool filledRunTree_;
   
 };
@@ -428,6 +436,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //   iSetup.get<TrackingComponentsRecord>().get("Geant4ePropagator", thePropagator);
   const MagneticField* field = thePropagator->magneticField();
   
+  ESHandle<Propagator> theAnalyticPropagator;
+  iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", theAnalyticPropagator);
   
 //   Handle<TrajTrackAssociationCollection> trackH;
 //   Handle<reco::TrackCollection> trackH;
@@ -466,22 +476,25 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   std::unique_ptr<PropagatorWithMaterial> fPropagator(static_cast<PropagatorWithMaterial*>(thePropagator->clone()));
   fPropagator->setPropagationDirection(alongMomentum);
   
+  std::unique_ptr<PropagatorWithMaterial> fAnalyticPropagator(static_cast<PropagatorWithMaterial*>(theAnalyticPropagator->clone()));
+  fAnalyticPropagator->setPropagationDirection(alongMomentum);
+  
   KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
 
   // set up cylindrical surface for beam pipe
-  const double ABe = 9.0121831;
-  const double ZBe = 4.;
-  const double K =  0.307075*1e-3;
-  const double dr = 0.08;
-//   const double xibeampipe = 0.5*K*dr*ZBe/ABe;
-  const double xibeampipe = 0.*0.5*K*dr*ZBe/ABe;
+//   const double ABe = 9.0121831;
+//   const double ZBe = 4.;
+//   const double K =  0.307075*1e-3;
+//   const double dr = 0.08;
+// //   const double xibeampipe = 0.5*K*dr*ZBe/ABe;
+//   const double xibeampipe = 0.*0.5*K*dr*ZBe/ABe;
   
   
   
   
-  auto beampipe = Cylinder::build(Surface::PositionType(0.,0.,0.), Surface::RotationType(), 2.94);
-  beampipe->setMediumProperties(MediumProperties(0., xibeampipe));
+//   auto beampipe = Cylinder::build(Surface::PositionType(0.,0.,0.), Surface::RotationType(), 2.94);
+//   beampipe->setMediumProperties(MediumProperties(0., xibeampipe));
   
 //   std::cout << "xi beampipe: " << xibeampipe << std::endl;
   
@@ -543,6 +556,236 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     
 //   }
   
+  
+  simtestzlocalref = -99.;
+  simtestdx = -99.;
+  simtestdxrec = -99.;
+  
+  if (false) {
+    
+    //sim hit debugging
+    const reco::GenParticle* genmuon = nullptr;
+    for (const reco::GenParticle& genPart : *genPartCollection) {
+      if (genPart.status()==1 && std::abs(genPart.pdgId()) == 13) {
+        genmuon = &genPart;
+        break;
+      }
+    }
+    
+    if (genmuon) {
+      genPt = genmuon->pt();
+      genCharge = genmuon->charge();
+      
+      auto const& refpoint = genmuon->vertex();
+      auto const& trackmom = genmuon->momentum();
+      const GlobalPoint refpos(refpoint.x(), refpoint.y(), refpoint.z());
+      const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
+  //     const GlobalTrajectoryParameters refglobal(refpos, refmom, genmuon->charge(), field);
+      
+  //       std::cout << "gen ref state" << std::endl;
+  //       std::cout << refpos << std::endl;
+  //       std::cout << refmom << std::endl;
+  //       std::cout << genpart->charge() << std::endl;
+      
+      //zero uncertainty on generated parameters
+  //       AlgebraicSymMatrix55 nullerr;
+  //       const CurvilinearTrajectoryError referr(nullerr);
+      
+      const FreeTrajectoryState fts = FreeTrajectoryState(refpos, refmom, genmuon->charge(), field);
+      
+      std::cout << "gen muon charge: " << genmuon->charge() << std::endl;
+      
+      TrajectoryStateOnSurface tsos;
+      
+      unsigned int ihit = 0;
+      for (auto const& simhith : simHits) {
+        for (const PSimHit& simHit : *simhith) {
+          
+          const GeomDet *detectorG = globalGeometry->idToDet(simHit.detUnitId());
+          
+          bool isbarrel = detectorG->subDetector() == GeomDetEnumerators::PixelBarrel || detectorG->subDetector() == GeomDetEnumerators::TIB || detectorG->subDetector() == GeomDetEnumerators::TOB;
+          
+          float absz = std::abs(detectorG->surface().toGlobal(LocalVector(0.,0.,1.)).z());
+          
+          bool idealdisk = absz == 1.;
+          bool idealbarrel = absz<1e-9;
+          
+  //         idealdisk = false;
+  //         idealbarrel = false;
+          
+          bool isstereo = trackerTopology->isStereo(simHit.detUnitId());
+
+          std::cout << "isbarrel: " << isbarrel << " idealbarrel: " << idealbarrel << " idealdisk: " << idealdisk << "stereo: " << isstereo << " globalpos: " << detectorG->surface().position() << std::endl;
+          
+          LocalPoint proplocal(0.,0.,0.);
+          
+//           auto const propresult = fPropagator->geometricalPropagator().propagateWithPath(fts, detectorG->surface());
+//           if (propresult.first.isValid()) {
+//             proplocal = propresult.first.localPosition();
+//           }
+          
+          if (!tsos.isValid()) {
+            tsos = fPropagator->geometricalPropagator().propagate(fts, detectorG->surface());
+          }
+          else {
+            tsos = fPropagator->geometricalPropagator().propagate(tsos, detectorG->surface());
+          }
+          
+          if (tsos.isValid()) {
+            proplocal = tsos.localPosition();
+          }
+          
+          
+          
+          
+  //         Vector3d refprop;
+          
+  //         LocalTrajectoryParameters
+          Point3DBase<double, LocalTag> reflocal(0, 0., 0.);
+
+          simtestz = detectorG->surface().position().z();
+          
+
+          auto const simhitglobal = detectorG->surface().toGlobal(Point3DBase<double, LocalTag>(simHit.localPosition().x(),
+                                                                                                simHit.localPosition().y(),
+                                                                                                simHit.localPosition().z()));
+          
+          const Vector3d Msim(simhitglobal.x(), simhitglobal.y(), simhitglobal.z());
+          
+          auto const propglobal = detectorG->surface().toGlobal(Point3DBase<double, LocalTag>(proplocal.x(),
+                                                                                                proplocal.y(),
+                                                                                                proplocal.z()));
+          
+          
+          const Vector3d Mprop(propglobal.x(), propglobal.y(), propglobal.z());
+          
+          Vector3d M(genmuon->vertex().x(),
+                                  genmuon->vertex().y(),
+                                  genmuon->vertex().z());
+          
+          Vector3d P(genmuon->momentum().x(),
+                                  genmuon->momentum().y(),
+                                  genmuon->momentum().z());
+          
+          
+          
+          
+  //         if (true) {
+          for (unsigned int iref=0; iref<1; ++iref) {
+            const double zs = detectorG->surface().position().z();
+            
+            const Vector3d T0 = P.normalized();
+            
+  //           const Vector3d T0 = P.normalized();
+            
+            const Vector3d H(0.,0.,1.);
+            
+            const double rho = fts.transverseCurvature();
+            
+            double s;
+            
+            if (idealdisk) {
+              s = (zs - M[2])/T0[2];
+            }
+            else if (false) {
+              HelixBarrelPlaneCrossingByCircle crossing(GlobalPoint(M[0],M[1],M[2]), GlobalVector(P[0],P[1],P[2]), rho);
+              s = crossing.pathLength(detectorG->surface()).second;
+            }
+            else {
+              HelixArbitraryPlaneCrossing crossing(Basic3DVector<float>(M[0],M[1],M[2]), Basic3DVector<float>(P[0],P[1],P[2]), rho);
+              s = crossing.pathLength(detectorG->surface()).second;
+  //             s = propresult.second;
+            }
+            
+            const Vector3d HcrossT = H.cross(T0);
+            const double alpha = HcrossT.norm();
+            const Vector3d N0 = HcrossT.normalized();
+            
+            const double gamma = T0[2];
+            const double q = genmuon->charge();
+            const double Q = -3.8*2.99792458e-3*q/P.norm();
+            const double theta = Q*s;
+            
+            const Vector3d dM = gamma*(theta-std::sin(theta))/Q*H + std::sin(theta)/Q*T0 + alpha*(1.-std::cos(theta))/Q*N0;
+            M = M + dM;
+            const Vector3d dT = gamma*(1.-std::cos(theta))*H + std::cos(theta)*T0 + alpha*std::sin(theta)*N0;
+            const Vector3d T = T0 + dT;
+            const double pmag = P.norm();
+            P = pmag*T;
+            
+            reflocal = detectorG->surface().toLocal(Point3DBase<double, GlobalTag>(M[0], M[1], M[2]));
+            simtestzlocalref = reflocal.z();
+            
+            const Vector3d xhat = Vector3d(0.,0.,1.).cross(M).normalized();
+            
+            const double dx = xhat.dot(Msim-M);
+            const double dxrec = xhat.dot(Mprop - Msim);
+            
+            simtestdx = dx;
+  //           simtestdxrec = dxrec;
+            simtestdxrec = proplocal.x() - simHit.localPosition().x();
+            
+            
+            if (idealdisk) {
+              break;
+            }
+            
+  //           refprop = M;
+            
+  //           const Vector3d Mprop(updtsosnomat.globalPosition().x(),
+  //                                 updtsosnomat.globalPosition().y(),
+  //                                 updtsosnomat.globalPosition().z()); 
+          }
+          
+          tree->Fill();
+  //         else {
+  //           const TrajectoryStateOnSurface propresult = fAnalyticPropagator->geometricalPropagator().propagate(fts, detectorG->surface());
+  //           if (propresult.isValid()) {
+  //             reflocal = propresult.localPosition();
+  // //             refprop << propresult.globalPosition().x(), propresult.globalPosition().y(), propresult.globalPosition().z();
+  //           }
+  // //           else {
+  // //             refprop << 0., 0., 0.;
+  // //           }
+  //         }
+          
+          
+  //         const LocalPoint reflocal = detectorG->surface().toLocal(GlobalPoint(refprop[0], refprop[1], refprop[2]));
+          
+
+          
+          const LocalPoint simlocal = simHit.localPosition();
+          
+//           std::cout << "isbarrel: " << isbarrel << " idealbarrel: " << idealbarrel << " idealdisk: " << idealdisk << "stereo: " << isstereo << " globalpos: " << detectorG->surface().position() << std::endl;
+          std::cout << "detid: " << simHit.detUnitId() << std::endl;
+          std::cout << "local z to global: " << detectorG->surface().toGlobal(LocalVector(0.,0.,1.)) << std::endl;
+          std::cout << "ref      : " << reflocal << std::endl;
+          std::cout << "proplocal: " << proplocal << std::endl;
+          std::cout << "sim-ref : " << simlocal - reflocal << std::endl;
+          std::cout << "prop-ref: " << proplocal - reflocal << std::endl;
+          std::cout << "sim-prop: " << simlocal - proplocal << std::endl;
+          
+          
+          ++ihit;
+          
+  //         if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
+  //           dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
+  //           dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
+  //           
+  //           dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
+  //           dyrecsim.push_back(-99.);
+  //           
+  //           simvalid = true;
+  //           break;
+  //         }
+        }
+      }
+      
+      
+    }
+    return;
+    
+  }
   
 //   TkClonerImpl hitCloner;
 //   TKCloner const* cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(builder)->cloner()
@@ -754,7 +997,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     
     //2x5 state parameters, one bfield parameter, and one material parameter
-    using MSScalar = AANT<double, 11>;;
+//     using MSScalar = AANT<double, 11>;;
+    using MSScalar = AANT<double, 13>;
     using MSVector = Matrix<MSScalar, 5, 1>;
     using MSProjection = Matrix<MSScalar, 5, 5>;
     using MSJacobian = Matrix<MSScalar, 5, 5>;
@@ -1161,8 +1405,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
 
         //FIXME take care of this elsewhere for the moment
-//         const bool genconstraint = dogen && ihit==0;
-        const bool genconstraint = false;
+        const bool genconstraint = dogen && ihit==0;
+//         const bool genconstraint = false;
         
         if (ihit < (nhits-1)) {
 
@@ -1245,8 +1489,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //             std::cout << FdFp << std::endl;
             
             constexpr unsigned int nlocalstate = 8;
-            constexpr unsigned int nlocalbfield = 2;
-            constexpr unsigned int nlocaleloss = 1;
+            constexpr unsigned int nlocalbfield = 3;
+            constexpr unsigned int nlocaleloss = 2;
             constexpr unsigned int nlocalparms = nlocalbfield + nlocaleloss;
             
             constexpr unsigned int nlocal = nlocalstate + nlocalbfield + nlocaleloss;
@@ -1258,7 +1502,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             const unsigned int fullstateidx = 3*ihit;
 //             const unsigned int fullstateidx = 3*(ihit-1);
-            const unsigned int fullparmidx = nstateparms + parmidx;
+            const unsigned int fullparmidx = nstateparms + parmidx - 2;
              
             // individual pieces, now starting to cast to active scalars for autograd,
             // as in eq (3) of https://doi.org/10.1016/j.cpc.2011.03.017
@@ -1322,34 +1566,38 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             Matrix<MSScalar, 2, 1> dum = Matrix<MSScalar, 2, 1>::Zero();
             //suppress gradients of reference point parameters when fitting with gen constraint
             for (unsigned int j=0; j<dum.size(); ++j) {
+              init_twice_active_var(dum[j], nlocal, localstateidx + j);
               //FIXME this would be the correct condition if we were using it
 //               if (dogen && ihit < 2) {
-              if (genconstraint) {
-                init_twice_active_null(dum[j], nlocal);
-              }
-              else {
-                init_twice_active_var(dum[j], nlocal, localstateidx + j);
-              }
+//               if (genconstraint) {
+//                 init_twice_active_null(dum[j], nlocal);
+//               }
+//               else {
+//                 init_twice_active_var(dum[j], nlocal, localstateidx + j);
+//               }
             }
 
             
             MSScalar dqopm(0.);
-            //suppress gradients of reference point parameters when fitting with gen constraint
-            if (genconstraint) {
-              init_twice_active_null(dqopm, nlocal);
-            }
-            else {
-              init_twice_active_var(dqopm, nlocal, localstateidx + 2);
-            }
+            init_twice_active_var(dqopm, nlocal, localstateidx + 2);
+            
+//             //suppress gradients of reference point parameters when fitting with gen constraint
+//             if (genconstraint) {
+//               init_twice_active_null(dqopm, nlocal);
+//             }
+//             else {
+//               init_twice_active_var(dqopm, nlocal, localstateidx + 2);
+//             }
 
             Matrix<MSScalar, 2, 1> du = Matrix<MSScalar, 2, 1>::Zero();
             for (unsigned int j=0; j<du.size(); ++j) {
-              if (genconstraint) {
-                init_twice_active_null(du[j], nlocal);
-              }
-              else {
-                init_twice_active_var(du[j], nlocal, localstateidx + 3 + j);
-              }
+              init_twice_active_var(du[j], nlocal, localstateidx + 3 + j);
+//               if (genconstraint) {
+//                 init_twice_active_null(du[j], nlocal);
+//               }
+//               else {
+//                 init_twice_active_var(du[j], nlocal, localstateidx + 3 + j);
+//               }
             }
             
             MSScalar dqop(0.);
@@ -1361,18 +1609,25 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             }
   
             // initialize active scalars for correction parameters
+            
+            // only used for gen constraint
+            MSScalar dbetam(0.);
+            
             MSScalar dbeta(0.);
-            init_twice_active_var(dbeta, nlocal, localparmidx);
+            init_twice_active_var(dbeta, nlocal, localparmidx + 2);
             
             MSScalar dxi(0.);
-            init_twice_active_var(dxi, nlocal, localparmidx + 1);
+            init_twice_active_var(dxi, nlocal, localparmidx + 3);
             
             MSScalar dbetap(0.);
-            init_twice_active_var(dbetap, nlocal, localparmidx + 2);
+            init_twice_active_var(dbetap, nlocal, localparmidx + 4);
             
-            if (genconstraint) {
-              //constrained value of du from b-field variation only
+            if (dogen && ihit==0) {
               du = Bpref.cast<MSScalar>()*dbeta;
+            }
+            else if (dogen && ihit==1) {
+              init_twice_active_var(dbetam, nlocal, localparmidx);
+              dum = Bpref.cast<MSScalar>()*dbetam;
             }
             
             //multiple scattering kink term
@@ -2323,10 +2578,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           hessfull.col(i) *= 0.;
           hessfull(i,i) = 1e6;
         }
-        //b field from reference point not consistently used in this case
-        gradfull[nstateparms] = 0.;
-        hessfull.row(nstateparms) *= 0.;
-        hessfull.col(nstateparms) *= 0.;
+//         //b field from reference point not consistently used in this case
+//         gradfull[nstateparms] = 0.;
+//         hessfull.row(nstateparms) *= 0.;
+//         hessfull.col(nstateparms) *= 0.;
       }
       
       //now do the expensive calculations and fill outputs
@@ -2683,6 +2938,15 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("dysimgen", &dysimgen);
     tree->Branch("dxrecsim", &dxrecsim);
     tree->Branch("dyrecsim", &dyrecsim);
+    
+    tree->Branch("simtestz", &simtestz);
+    tree->Branch("simtestzlocalref", &simtestzlocalref);
+    tree->Branch("simtestdx", &simtestdx);
+    tree->Branch("simtestdxrec", &simtestdxrec);
+    
+    
+    nParms = 0.;
+    nJacRef = 0.;
     
   }
 
