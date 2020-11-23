@@ -912,7 +912,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         nvalid += 1;
         
         const GeomDet *detectorG = globalGeometry->idToDet(hit->geographicalId());
-        if (hit->dimension()==2 && GeomDetEnumerators::isTrackerPixel(detectorG->subDetector())) {
+//         if (hit->dimension()==2 && GeomDetEnumerators::isTrackerPixel(detectorG->subDetector())) {
+        if (hit->dimension()==2) {
           nvalidpixel += 1;
         }
       }
@@ -1502,7 +1503,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             const unsigned int fullstateidx = 3*ihit;
 //             const unsigned int fullstateidx = 3*(ihit-1);
-            const unsigned int fullparmidx = nstateparms + parmidx - 2;
+            const unsigned int fullparmidx = (nstateparms + parmidx) - 2;
+            
+//             std::cout << "ihit = " << ihit << " nstateparms = " << nstateparms << " parmidx = " << parmidx << " fullparmidx = " << fullparmidx << std::endl;
              
             // individual pieces, now starting to cast to active scalars for autograd,
             // as in eq (3) of https://doi.org/10.1016/j.cpc.2011.03.017
@@ -1992,7 +1995,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //             std::cout << "iV eigenvalues" << std::endl;
 //             std::cout << eigensolver.eigenvalues() << std::endl;
                   
-            if (ispixel) {
+//             if (ispixel) {
+            if (true) {
               constexpr unsigned int nlocalalignment = 2;
               constexpr unsigned int nlocalparms = nlocalalignment;
               constexpr unsigned int nlocal = nlocalstate + nlocalparms;
@@ -2150,15 +2154,18 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               }
               
               
-              const Matrix<double, 2, 1> dy0eig = v.transpose()*dy0local;
+//               const Matrix<double, 2, 1> dy0eig = v.transpose()*dy0local;
               
-              StripHit2DCovariance Vinv = StripHit2DCovariance::Zero();
-              Vinv(0,0) = StripHitScalar(1./eigensolver.eigenvalues()[0]);
-              Vinv(1,1) = StripHitScalar(1./eigensolver.eigenvalues()[1]);
+//               StripHit2DCovariance Vinv = StripHit2DCovariance::Zero();
+//               Vinv(0,0) = StripHitScalar(1./eigensolver.eigenvalues()[0]);
+//               Vinv(1,1) = StripHitScalar(1./eigensolver.eigenvalues()[1]);
+              const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
               
               StripHitVector dy0 = StripHitVector::Zero();
-              dy0[0] = StripHitScalar(dy0eig[0]);
-              dy0[1] = StripHitScalar(dy0eig[1]);
+//               dy0[0] = StripHitScalar(dy0eig[0]);
+//               dy0[1] = StripHitScalar(dy0eig[1]);
+              dy0[0] = StripHitScalar(dy0local[0]);
+              dy0[1] = StripHitScalar(dy0local[1]);
               
               dxrecgen.push_back(dy0[0].value().value());
               dyrecgen.push_back(dy0[1].value().value());
@@ -2202,7 +2209,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 }
               }
               
-              const Matrix<StripHitScalar, 2, 2> rot = v.transpose().cast<StripHitScalar>();
+//               const Matrix<StripHitScalar, 2, 2> rot = v.transpose().cast<StripHitScalar>();
               
 //               if (preciseHit->det()->subDetector() == GeomDetEnumerators::TEC)
 //               {
@@ -2536,7 +2543,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
 //               StripHitScalar qhit(updtsos.charge());
               
-              StripHitVector dh = dy0 - rot*dx - A*dalpha;
+//               StripHitVector dh = dy0 - rot*dx - A*dalpha;
+              StripHitVector dh = dy0 - dx - A*dalpha;
               StripHitScalar chisq = dh.transpose()*Vinv*dh;
 
               auto const& gradlocal = chisq.value().derivatives();
@@ -3015,7 +3023,7 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
       parmset.emplace(0, det->geographicalId());
       parmset.emplace(2, det->geographicalId());
       parmset.emplace(3, det->geographicalId());
-      if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
+      if (GeomDetEnumerators::isTrackerPixel(det->subDetector()) || GeomDetEnumerators::isEndcap(det->subDetector())) {
         //local y alignment parameters only for pixels for now
         parmset.emplace(1, det->geographicalId());
       }
