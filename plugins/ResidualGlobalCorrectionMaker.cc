@@ -930,8 +930,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
 //     const unsigned int nstriphits = nhits-npixhits;
 //     const unsigned int nparsAlignment = nstriphits + 2*npixhits;
-    const unsigned int nvalidstrip = nvalid - nvalidpixel;
-    const unsigned int nparsAlignment = nvalidstrip + 2*nvalidpixel;
+//     const unsigned int nvalidstrip = nvalid - nvalidpixel;
+//     const unsigned int nparsAlignment = nvalidstrip + 2*nvalidpixel;
+    const unsigned int nparsAlignment = 3*nvalid;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits-1;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
@@ -996,8 +997,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
     
     
-    //two hit dimensions and two alignment parameters
-    using PixelHit2DScalar = AANT<double, 4>;
+    //two hit dimensions and three alignment parameters
+    using PixelHit2DScalar = AANT<double, 5>;
     using PixelHit2DVector = Matrix<PixelHit2DScalar, 2, 1>;
     using PixelHit2DCovariance = Matrix<PixelHit2DScalar, 2, 2>;
     using PixelHit2DJacobian = Matrix<PixelHit2DScalar, 2, 2>;
@@ -1889,11 +1890,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
-            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,hit->geographicalId()));
+            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
             globalidxv[parmidx] = bfieldglobalidx;
             parmidx++;
             
-            const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
+            const unsigned int elossglobalidx = detidparms.at(std::make_pair(4,hit->geographicalId()));
             globalidxv[parmidx] = elossglobalidx;
             parmidx++;
           }
@@ -1924,153 +1925,72 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //           const unsigned int fullstateidx = 3*ihit;
           const unsigned int fullparmidx = nstateparms + nparsBfield + nparsEloss + alignmentparmidx;
 
-//           if (!ispixel || preciseHit->dimension()==1) {
-          if (preciseHit->dimension()==1) {
-            constexpr unsigned int nlocalalignment = 1;
-            constexpr unsigned int nlocalparms = nlocalalignment;
-            constexpr unsigned int nlocal = nlocalstate + nlocalparms;
-            
-            const Matrix<StripHitScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<StripHitScalar>();
-            
-            const StripHitScalar dy0(preciseHit->localPosition().x() - updtsos.localPosition().x());
-            const StripHitScalar Vinv(1./preciseHit->localPositionError().xx());
-            
-            dxrecgen.push_back(dy0.value().value());
-            dyrecgen.push_back(-99.);
-            
-            if (doSim_) {
-              bool simvalid = false;
-              for (auto const& simhith : simHits) {
-                for (const PSimHit& simHit : *simhith) {
-                  if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
-                    dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
-                    dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
-                    
-                    dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
-                    dyrecsim.push_back(-99.);
-                    
-                    simvalid = true;
-                    break;
-                  }
-                }
-                if (simvalid) {
-                  break;
-                }
-              }
-              if (!simvalid) {
-                dxsimgen.push_back(-99.);
-                dysimgen.push_back(-99.);
-                dxrecsim.push_back(-99.);
-                dyrecsim.push_back(-99.);
-              }
-            }
-            
-//             std::cout << "dy0" << std::endl;
-//             std::cout << dy0 << std::endl;
-            
-            StripHitVector dx = StripHitVector::Zero();
-            StripHitScalar dbeta(0.);
-            if (!genconstraint) {
-              for (unsigned int j=0; j<dx.size(); ++j) {
-                init_twice_active_var(dx[j], nlocal, localstateidx + j);
-              }
-            }
-            else {
-              init_twice_active_var(dbeta, nlocal, localstateidx);
-              dx = Bpref.cast<StripHitScalar>()*dbeta;
-            }
-            
-            //single alignment parameter
-            StripHitScalar dalpha(0.);
-            init_twice_active_var(dalpha, nlocal, localalignmentidx);
-
-            
-            const StripHitScalar A(1.);
-            
-//             const StripHit1DJacobian H = jacheig.block<1,2>(3,3).cast<StripHitScalar>();
-            
-//             StripHitScalar qhit(updtsos.charge());
-            
-            StripHitScalar dh = dy0 - (Hu*dx)[0] - A*dalpha;
-            StripHitScalar chisq = dh*dh*Vinv;
-            
-            auto const& gradlocal = chisq.value().derivatives();
-            //fill local hessian
-            Matrix<double, nlocal, nlocal> hesslocal;
-            for (unsigned int j=0; j<nlocal; ++j) {
-              hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-            }
-            
-            //fill global gradient
-            gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
-            gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
-
-            //fill global hessian (upper triangular blocks only)
-            hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-            hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-            hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
-            
-            const unsigned int xglobalidx = detidparms.at(std::make_pair(0,preciseHit->geographicalId()));
-            globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
-            alignmentparmidx++;
-            
-            hitidxv.push_back(xglobalidx);
-          }
-          else if (preciseHit->dimension()==2) {
-            
-
-            Matrix2d iV;
-            iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
-                  preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
-            
+//           Matrix2d iV;
+//           iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
+//                 preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
+          
 //             SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
 //             std::cout << "ispixel: " << ispixel << std::endl;
 //             std::cout << "isStereo: " << trackerTopology->isStereo(preciseHit->geographicalId()) << std::endl;
 //             std::cout << "iV eigenvalues" << std::endl;
 //             std::cout << eigensolver.eigenvalues() << std::endl;
-                  
-            if (ispixel) {
+                
 //             if (true) {
-              constexpr unsigned int nlocalalignment = 2;
-              constexpr unsigned int nlocalparms = nlocalalignment;
-              constexpr unsigned int nlocal = nlocalstate + nlocalparms;
-              
-              const Matrix<PixelHit2DScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<PixelHit2DScalar>();
-              
-              PixelHit2DVector dy0;
-              dy0[0] = PixelHit2DScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
-              dy0[1] = PixelHit2DScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
-              
-              dxrecgen.push_back(dy0[0].value().value());
-              dyrecgen.push_back(dy0[1].value().value());
-              
-              if (doSim_) {
-                bool simvalid = false;
-                for (auto const& simhith : simHits) {
-                  for (const PSimHit& simHit : *simhith) {
-                    if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
-                      dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
-                      dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
-                      
-                      dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
-                      dyrecsim.push_back(preciseHit->localPosition().y() - simHit.localPosition().y());
-                      
-                      simvalid = true;
-                      break;
-                    }
-                  }
-                  if (simvalid) {
-                    break;
-                  }
-                }
-                if (!simvalid) {
-                  dxsimgen.push_back(-99.);
-                  dysimgen.push_back(-99.);
-                  dxrecsim.push_back(-99.);
-                  dyrecsim.push_back(-99.);
+          constexpr unsigned int nlocalalignment = 3;
+          constexpr unsigned int nlocalparms = nlocalalignment;
+          constexpr unsigned int nlocal = nlocalstate + nlocalparms;
+          
+          const Matrix<PixelHit2DScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<PixelHit2DScalar>();
+          
+          PixelHit2DVector dy0;
+          PixelHit2DCovariance Vinv;
+          
+          dy0[0] = PixelHit2DScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
+          if (preciseHit->dimension() == 2) {
+            dy0[1] = PixelHit2DScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
+            
+            Matrix2d iV;
+            iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
+                  preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
+            
+            Vinv = iV.inverse().cast<PixelHit2DScalar>();
+          }
+          else {
+            dy0[1] = PixelHit2DScalar(0.);
+            Vinv = PixelHit2DCovariance::Zero();
+            Vinv(0,0) = PixelHit2DScalar(1./preciseHit->localPositionError().xx());
+          }
+          
+          dxrecgen.push_back(dy0[0].value().value());
+          dyrecgen.push_back(dy0[1].value().value());
+          
+          if (doSim_) {
+            bool simvalid = false;
+            for (auto const& simhith : simHits) {
+              for (const PSimHit& simHit : *simhith) {
+                if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
+                  dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
+                  dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
+                  
+                  dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
+                  dyrecsim.push_back(preciseHit->localPosition().y() - simHit.localPosition().y());
+                  
+                  simvalid = true;
+                  break;
                 }
               }
-              
+              if (simvalid) {
+                break;
+              }
+            }
+            if (!simvalid) {
+              dxsimgen.push_back(-99.);
+              dysimgen.push_back(-99.);
+              dxrecsim.push_back(-99.);
+              dyrecsim.push_back(-99.);
+            }
+          }
+          
 //               if (preciseHit->det()->subDetector() == GeomDetEnumerators::PixelBarrel)
 //               {
 //                 PXBDetId detid(preciseHit->det()->geographicalId());
@@ -2092,522 +2012,78 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //                   dypxb1 = preciseHit->localPosition().y() - updtsos.localPosition().y();
 //                 }
 //               }
-              
-              
+          
+          
 //               std::cout << "dy0 (pixel hit)" << std::endl;
 //               std::cout << dy0 << std::endl;
 //               std::cout << "hit surface global" << std::endl;
 //               std::cout << hit->surface()->toGlobal(LocalPoint(0.,0.)) << std::endl;
 //               std::cout << "updtsos surface global" << std::endl;
 //               std::cout << updtsos.surface().toGlobal(LocalPoint(0.,0.)) << std::endl;
-              
-              const PixelHit2DCovariance Vinv = iV.inverse().cast<PixelHit2DScalar>();
-              
-              PixelHit2DVector dx = PixelHit2DVector::Zero();
-              PixelHit2DScalar dbeta(0.);
-              if (!genconstraint) {
-                for (unsigned int j=0; j<dx.size(); ++j) {
-                  init_twice_active_var(dx[j], nlocal, localstateidx + j);
-                }
-              }
-              else {
-                init_twice_active_var(dbeta, nlocal, localstateidx);
-                dx = Bpref.cast<PixelHit2DScalar>()*dbeta;
-              }
-              
-              //two alignment parameters
-              PixelHit2DVector dalpha = PixelHit2DVector::Zero();
-              for (unsigned int idim=0; idim<2; ++idim) {
-                init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
-              }
-              const Matrix<PixelHit2DScalar, 2, 2> A = Matrix<PixelHit2DScalar, 2, 2>::Identity();
-              
+          
+//           const PixelHit2DCovariance Vinv = iV.inverse().cast<PixelHit2DScalar>();
+          
+          PixelHit2DVector dx = PixelHit2DVector::Zero();
+          PixelHit2DScalar dbeta(0.);
+          if (!genconstraint) {
+            for (unsigned int j=0; j<dx.size(); ++j) {
+              init_twice_active_var(dx[j], nlocal, localstateidx + j);
+            }
+          }
+          else {
+            init_twice_active_var(dbeta, nlocal, localstateidx);
+            dx = Bpref.cast<PixelHit2DScalar>()*dbeta;
+          }
+          
+          //two alignment parameters
+//           PixelHit2DVector dalpha = PixelHit2DVector::Zero();
+          Matrix<PixelHit2DScalar, 3, 1> dalpha = Matrix<PixelHit2DScalar, 3, 1>::Zero();
+          for (unsigned int idim=0; idim<dalpha.size(); ++idim) {
+            init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
+          }
+          
+          Matrix<PixelHit2DScalar, 2, 3> A = Matrix<PixelHit2DScalar, 2, 3>::Zero();
+          // dux/dalphax
+          A(0,0) = PixelHit2DScalar(1.);
+          // duy/dalphay
+          A(1,1) = PixelHit2DScalar(1.);
+          // dux/dalphaz
+          A(0,2) = PixelHit2DScalar(updtsos.localParameters().dxdz());
+          // duy/dalphaz
+          A(1,2) = PixelHit2DScalar(updtsos.localParameters().dydz());
+          
 //               const PixelHit2DJacobian H = jacheig.bottomRightCorner<2,2>().cast<PixelHit2DScalar>();
 
 //               PixelHit2DScalar qhit(updtsos.charge());
-              
-              const PixelHit2DVector dh = dy0 - Hu*dx - A*dalpha;
-              const PixelHit2DScalar chisq = dh.transpose()*Vinv*dh;
-              
-              auto const& gradlocal = chisq.value().derivatives();
-              //fill local hessian
-              Matrix<double, nlocal, nlocal> hesslocal;
-              for (unsigned int j=0; j<nlocal; ++j) {
-                hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-              }
-              
-              //fill global gradient
-              gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
-              gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+          
+          const PixelHit2DVector dh = dy0 - Hu*dx - A*dalpha;
+          const PixelHit2DScalar chisq = dh.transpose()*Vinv*dh;
+          
+          auto const& gradlocal = chisq.value().derivatives();
+          //fill local hessian
+          Matrix<double, nlocal, nlocal> hesslocal;
+          for (unsigned int j=0; j<nlocal; ++j) {
+            hesslocal.row(j) = chisq.derivatives()[j].derivatives();
+          }
+          
+          //fill global gradient
+          gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
+          gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
 
-              //fill global hessian (upper triangular blocks only)
-              hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-              hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-              hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
-              
-              for (unsigned int idim=0; idim<2; ++idim) {
-                const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, preciseHit->geographicalId()));
-                globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
-                alignmentparmidx++;
-                if (idim==0) {
-                  hitidxv.push_back(xglobalidx);
-                }
-              }
-            }
-            else {
-              constexpr unsigned int nlocalalignment = 1;
-              constexpr unsigned int nlocalparms = nlocalalignment;
-              constexpr unsigned int nlocal = nlocalstate + nlocalparms;
-              
-//               StripHitVector dy0;
-//               dy0[0] = StripHitScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
-//               dy0[1] = StripHitScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
-              
-//               std::cout << "localpos x: " << preciseHit->localPosition().x() << std::endl;
-//               std::cout << "localpos y: " << preciseHit->localPosition().y() << std::endl;
-              
-//               const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
-              
-//               const Matrix<StripHitScalar, 2, 2> rot = Matrix<StripHitScalar, 2, 2>::Identity();
-              
-              SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
-              Matrix<double, 2, 1> dy0local;
-              dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
-              dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
-              
-//               const GlobalPoint hitGlobal = preciseHit->surface()->toGlobal(preciseHit->localPosition());
-//               TSCPBuilderNoMaterial tscpbuilder;
-//               const TrajectoryStateClosestToPoint tscp = tscpbuilder(refFts, hitGlobal);
-//               dy0local[0] = (hitGlobal - tscp.position()).dot(preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)));         
-//               dy0local[1] = (hitGlobal - tscp.position()).dot(preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)));
-              
-              Matrix<double, 2, 2> v = eigensolver.eigenvectors();
-              if (v(0,0) < 0.) {
-                v.col(0) = -v.col(0);
-              }
-              if (v(1,1) < 0.) {
-                v.col(1) = -v.col(1);
-              }
-              
-              
-//               const Matrix<double, 2, 1> dy0eig = v.transpose()*dy0local;
-              
-//               StripHit2DCovariance Vinv = StripHit2DCovariance::Zero();
-//               Vinv(0,0) = StripHitScalar(1./eigensolver.eigenvalues()[0]);
-//               Vinv(1,1) = StripHitScalar(1./eigensolver.eigenvalues()[1]);
-              const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
-              
-              const Matrix<StripHitScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<StripHitScalar>();
-              
-              StripHitVector dy0 = StripHitVector::Zero();
-//               dy0[0] = StripHitScalar(dy0eig[0]);
-//               dy0[1] = StripHitScalar(dy0eig[1]);
-              dy0[0] = StripHitScalar(dy0local[0]);
-              dy0[1] = StripHitScalar(dy0local[1]);
-              
-              dxrecgen.push_back(dy0[0].value().value());
-              dyrecgen.push_back(dy0[1].value().value());
-
-              if (doSim_) {
-                bool simvalid = false;
-                for (auto const& simhith : simHits) {
-                  for (const PSimHit& simHit : *simhith) {
-                    if (simHit.detUnitId() == preciseHit->geographicalId()) {
-                      Matrix<double, 2, 1> dysimgenlocal;
-                      dysimgenlocal[0] = simHit.localPosition().x() - updtsos.localPosition().x();
-                      dysimgenlocal[1] = simHit.localPosition().y() - updtsos.localPosition().y();
-                      
-                      const Matrix<double, 2, 1> dysimgeneig = v.transpose()*dysimgenlocal;
-                      
-                      Matrix<double, 2, 1> dyrecsimlocal;
-                      dyrecsimlocal[0] = preciseHit->localPosition().x() - simHit.localPosition().x();
-                      dyrecsimlocal[1] = preciseHit->localPosition().y() - simHit.localPosition().y();
-                      
-                      const Matrix<double, 2, 1> dyrecsimeig = v.transpose()*dyrecsimlocal;
-                      
-                      dxsimgen.push_back(dysimgeneig[0]);
-                      dysimgen.push_back(dysimgeneig[1]);
-                      
-                      dxrecsim.push_back(dyrecsimeig[0]);
-                      dyrecsim.push_back(dyrecsimeig[1]);
-                      
-                      simvalid = true;
-                      break;
-                    }
-                  }
-                  if (simvalid) {
-                    break;
-                  }
-                }
-                if (!simvalid) {
-                  dxsimgen.push_back(-99.);
-                  dysimgen.push_back(-99.);
-                  dxrecsim.push_back(-99.);
-                  dyrecsim.push_back(-99.);
-                }
-              }
-              
-//               const Matrix<StripHitScalar, 2, 2> rot = v.transpose().cast<StripHitScalar>();
-              
-//               if (preciseHit->det()->subDetector() == GeomDetEnumerators::TEC)
-//               {
-//           //       TECDetId detid(det->geographicalId());
-//           //       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
-//                 unsigned int side = trackerTopology->tecSide(preciseHit->det()->geographicalId());
-//                 unsigned int wheel = trackerTopology->tecWheel(preciseHit->det()->geographicalId());
-//                 int layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
-//                 bool isStereo = trackerTopology->isStereo(preciseHit->det()->geographicalId());
-//                 
-// //                 const GluedGeomDet* gluedDet = dynamic_cast<const GluedGeomDet *>(preciseHit->det());
-// //                 
-// //                 std::cout << "tec layer " << layer << " stereo " << isStereo << std::endl;
-// //                 std::cout << "surface position:" << std::endl;
-// //                 std::cout << preciseHit->surface()->toGlobal(LocalPoint(0.,0.)) << std::endl;
-// //                 std::cout << "glued det: " << gluedDet << std::endl;
-// //                 std::cout << preciseHit->det()->monoDet() << std::endl;
-// //                 std::cout << preciseHit->det()->stereoDet() << std::endl;
-//                 
-// //                 std::cout << "local x to global: " << preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)) << std::endl;
-// //                 std::cout << "local y to global: " << preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)) << std::endl;
-// //                 std::cout << "local z to global: " << preciseHit->surface()->toGlobal(LocalVector(0.,0.,1.)) << std::endl;
-//                 
-//                 
-// //                 double dxt = v.col(0).transpose()*dy0local;
-//                 double dxt = dy0eig[0];
-//                 
-// //                 double dxt = -99.;
-// //                 
-// //  
-// //                 const StripGeomDetUnit* sgu = static_cast<const StripGeomDetUnit*>(preciseHit->det());
-// //                 const TkRadialStripTopology *topol = dynamic_cast<const TkRadialStripTopology*>(&sgu->specificType().specificTopology());
-// //                 
-// //                 if (topol) {                  
-// //                   
-// //                   const double lx = preciseHit->localPosition().x();
-// //                   const double ly = topol->yDistanceToIntersection(preciseHit->localPosition().y());
-// //                   const double phi =  std::atan(lx/ly);
-// //                   
-// //                   dxt = std::cos(phi)*dy0local[0] + std::sin(phi)*dy0local[1];
-// //                 }
-//                 
-// //                 const TrajectoryStateOnSurface updtsosnomat = fPropagator->geometricalPropagator().propagate(refFts, *preciseHit->surface());
-//                 
-//                 
-//                 double dxtsimgen = -99.;
-//                 double dytsimgen = -99.;
-//                 double dxtrecsim = -99.;
-//                 
-//                 
-// //                 if (preciseHit->geographicalId().rawId()==470098246) {
-// //                   std::cout << "Surface position in global" << std::endl;
-// //                   std::cout << preciseHit->surface()->position() << std::endl;
-// //                   std::cout << "local x to global:" << std::endl;
-// //                   std::cout << preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)) << std::endl;
-// //                   std::cout << "local y to global:" << std::endl;
-// //                   std::cout << preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)) << std::endl;
-// //                   std::cout << "local z to global:" << std::endl;
-// //                   std::cout << preciseHit->surface()->toGlobal(LocalVector(0.,0.,1.)) << std::endl;
-// //                 }
-//                 
-//                 if (doSim_) {
-// //                 if (doSim_ && preciseHit->geographicalId().rawId()==470098246) {
-//                   for (const PSimHit& simHit : *tecSimHits) {
-//                     if (simHit.detUnitId() == preciseHit->geographicalId()) {
-//                       
-//                       
-// //                       const double zs = preciseHit->surface()->position().z();
-// //                       
-// //                       const Vector3d M0(genpart->vertex().x(),
-// //                                               genpart->vertex().y(),
-// //                                               genpart->vertex().z());
-// //                       
-// //                       const Vector3d P0(genpart->momentum().x(),
-// //                                               genpart->momentum().y(),
-// //                                               genpart->momentum().z());
-// //                       
-// //                       const Vector3d T0 = P0.normalized();
-// //                       
-// //                       const Vector3d H(0.,0.,1.);
-// //                       
-// //                       const double s = (zs - M0[2])/T0[2];
-// //                       
-// //                       const Vector3d HcrossT = H.cross(T0);
-// //                       const double alpha = HcrossT.norm();
-// //                       const Vector3d N0 = HcrossT.normalized();
-// //                       
-// //                       const double gamma = T0[2];
-// //                       const double q = genpart->charge();
-// //                       const double Q = -3.8*2.99792458e-3*q/P0.norm();
-// //                       const double theta = Q*s;
-// //                       
-// //                       const Vector3d M = M0 + gamma*(theta-std::sin(theta))/Q*H + std::sin(theta)/Q*T0 + alpha*(1.-std::cos(theta))/Q*N0;
-// //                       
-// //                       const Vector3d Mprop(updtsosnomat.globalPosition().x(),
-// //                                            updtsosnomat.globalPosition().y(),
-// //                                            updtsosnomat.globalPosition().z());
-// //                       
-// //                       const LocalPoint localExpected = preciseHit->surface()->toLocal(GlobalPoint(M[0],M[1],M[2]));
-//                       
-// //                       std::cout << "gen charge: " << genpart->charge() << std::endl;
-// //                       std::cout << "by hand solution:" << std::endl;
-// //                       std::cout << M << std::endl;
-// //                       std::cout << "propagator solution:" << std::endl;
-// //                       std::cout << Mprop << std::endl;
-// //                       std::cout << "delta" << std::endl;
-// //                       std::cout << Mprop - M << std::endl;
-// //                       std::cout << "localExpected" << std::endl;
-// //                       printf("%9e, %9e\n", localExpected.x(), localExpected.y());
-//                       
-//                       simlocalxref = simHit.localPosition().x();
-//                       simlocalyref = simHit.localPosition().y();
-//                       
-// //                       std::cout << s << std::endl;
-//                       
-// //                       std::cout << "entry point global" << std::endl;
-// //                       std::cout << preciseHit->surface()->toGlobal(simHit.entryPoint()) << std::endl;
-// //                       std::cout << "position global" << std::endl;
-// //                       std::cout << preciseHit->surface()->toGlobal(simHit.localPosition()) << std::endl;
-// //                       std::cout << "exit point global" << std::endl;
-// //                       std::cout << preciseHit->surface()->toGlobal(simHit.exitPoint()) << std::endl;
-// //                       
-// //                       const GlobalPoint simPos = preciseHit->surface()->toGlobal(simHit.entryPoint());
-// //                       const GlobalVector simMom = preciseHit->surface()->toGlobal(simHit.momentumAtEntry());
-// //                       const FreeTrajectoryState simFts(simPos, simMom, genpart->charge(), field);
-// //                       
-// //                       const TrajectoryStateOnSurface simtsos = fPropagator->geometricalPropagator().propagate(simFts, *preciseHit->surface());
-// //                       
-// //                       if (!simtsos.isValid()) {
-// //                         break;
-// //                       }
-// //                       
-// // //                       std::cout << "delta local position (simtsos - simhit)" << std::endl;
-// //                       std::cout << simtsos.localPosition() - simHit.localPosition();
-//                       
-// 
-//   //                     std::cout << "found matched tec simhit" << std::endl;
-//                       
-//   //                     std::cout << simHit
-//   //                     std::cout << "updtsos global" << std::endl;
-//                       
-//   //                     std::cout << "sim-gen /*global*/" << std::endl;
-//                       
-//                       
-//                       
-//                       Matrix<double, 2, 1> dy0localsimgen;
-//                       dy0localsimgen[0] = simHit.localPosition().x() -  updtsos.localPosition().x();
-//                       dy0localsimgen[1] = simHit.localPosition().y() -  updtsos.localPosition().y();
-// //                       dy0localsimgen[0] = simHit.localPosition().x() -  updtsosnomat.localPosition().x();
-// //                       dy0localsimgen[1] = simHit.localPosition().y() -  updtsosnomat.localPosition().y();
-//   //                     dy0localsimgen[0] = simHit.entryPoint().x() -  updtsos.localPosition().x();
-//   //                     dy0localsimgen[1] = simHit.entryPoint().y() -  updtsos.localPosition().y();
-//   //                     dy0localsimgen[0] = simHit.exitPoint().x() -  updtsos.localPosition().x();
-//   //                     dy0localsimgen[1] = simHit.exitPoint().y() -  updtsos.localPosition().y();
-// //                       dy0localsimgen[0] = simtsos.localPosition().x() -  updtsos.localPosition().x();
-// //                       dy0localsimgen[1] = simtsos.localPosition().y() -  updtsos.localPosition().y();
-//   //                     
-// 
-// //                       const GlobalPoint simGlobal = preciseHit->surface()->toGlobal(simHit.localPosition());
-// //                       TSCBLBuilderWithPropagator tscblbuilder(fPropagator->geometricalPropagator());
-// //                       const reco::BeamSpot simbs(reco::BeamSpot::Point(simGlobal), 0., 0., 0., 0., reco::BeamSpot::CovarianceMatrix());
-// //                       const TrajectoryStateClosestToBeamLine tscbl = tscblbuilder(refFts, simbs);
-// // //                       dxtsimgen = tscbl.transverseImpactParameter().value();
-// //                       
-// //                       dy0localsimgen[0] = (simGlobal - tscbl.trackStateAtPCA().position()).dot(preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)));         
-// //                       dy0localsimgen[1] = (simGlobal - tscbl.trackStateAtPCA().position()).dot(preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)));
-// 
-// //                       TSCPBuilderNoMaterial tscpbuilder;
-// //                       const TrajectoryStateClosestToPoint tscp = tscpbuilder(refFts, simGlobal);
-// // //                       dxtsimgen = tscp.perigeeParameters().transverseImpactParameter();
-// // //                       dytsimgen = tscp.perigeeParameters().longitudinalImpactParameter();
-// // //                       dxtsimgen = (pcastate.position() - simGlobal).mag();
-// //                       dy0localsimgen[0] = (simGlobal - tscp.position()).dot(preciseHit->surface()->toGlobal(LocalVector(1.,0.,0.)));         
-// //                       dy0localsimgen[1] = (simGlobal - tscp.position()).dot(preciseHit->surface()->toGlobal(LocalVector(0.,1.,0.)));
-//                       
-//                       const Matrix<double, 2, 1> dy0eigsimgen = v.transpose()*dy0localsimgen;
-//                       
-//                       dxtsimgen = dy0eigsimgen[0];
-//                       dytsimgen = dy0eigsimgen[1];
-//                     
-// 
-//   //                     const FreeTrajectoryState pcastate = fPropagator->geometricalPropagator().propagateWithPath(refFts, simGlobal).first;  
-//   //                     TSCPBuilderNoMaterial tscpbuilder;
-//   //                     const TrajectoryStateClosestToPoint tscp = tscpbuilder(refFts, simGlobal);
-//   //                     dxtsimgen = tscp.perigeeParameters().transverseImpactParameter();
-//   //                     dytsimgen = tscp.perigeeParameters().longitudinalImpactParameter();
-//   //                     dxtsimgen = (pcastate.position() - simGlobal).mag();
-//                       
-// 
-//                       
-//                       Matrix<double, 2, 1> dy0localrecsim;
-//                       dy0localrecsim[0] = preciseHit->localPosition().x() - simHit.localPosition().x();
-//                       dy0localrecsim[1] = preciseHit->localPosition().y() - simHit.localPosition().y();
-//                       
-//                       const Matrix<double, 2, 1> dy0eigrecsim = v.transpose()*dy0localrecsim;
-//                       
-//                       dxtrecsim = dy0eigrecsim[0];
-//                       
-//   //                     if (std::abs(layer) == 4 && !isStereo) {
-//   //                       std::cout << "simhit entry" << std::endl;
-//   //                       std::cout << simHit.entryPoint() << std::endl;
-//   //                       std::cout << "simhit exit" << std::endl;
-//   //                       std::cout << simHit.exitPoint() << std::endl;
-//   //                       std::cout << "simhit exit-entry" << std::endl;
-//   //                       std::cout << simHit.exitPoint() - simHit.entryPoint() << std::endl;
-//   //                     }
-//                       break;
-//                     }
-//                   }
-//                 }
-                
-//                 if (std::abs(layer) == 4 && isStereo) {
-//                   dxttec4stereo = dxt;
-//                 }
-//                 else if (std::abs(layer) == 4 && !isStereo) {
-// //                   std::cout << "tec 4 rphi detid: " << preciseHit->geographicalId().rawId() << std::endl;
-//                   dxttec4rphi = dxt;
-//                   dxttec4rphisimgen = dxtsimgen;
-//                   dyttec4rphisimgen = dytsimgen;
-//                   dxttec4rphirecsim = dxtrecsim;
-//                 }
-//                 else if (std::abs(layer) == 9 && isStereo) {
-//                   dxttec9stereo = dxt;
-//                 }
-//                 else if (std::abs(layer) == 9 && !isStereo) {
-//                   dxttec9rphi = dxt;
-//                   dxttec9rphisimgen = dxtsimgen;
-//                   dyttec9rphisimgen = dytsimgen;
-//                 }
-// 
-//               }
-
-              
-              // smaller eigenvalue only
-//               SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
-// //               std::cout << "strip eigenvalues" << std::endl;
-// //               std::cout << eigensolver.eigenvalues() << std::endl;
-// //               std::cout << "strip eigenvectors" << std::endl;
-// //               std::cout << eigensolver.eigenvectors() << std::endl;
-//               
-//               StripHit2DCovariance Vinv = StripHit2DCovariance::Zero();
-//               Vinv(0,0) = StripHitScalar(1./eigensolver.eigenvalues()[0]);
-//               
-//               Matrix<double, 2, 1> dy0local;
-//               dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
-//               dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
-//               
-//               const Matrix<double, 2, 1> dy0eig = eigensolver.eigenvectors().transpose()*dy0local;
-//               
-//               StripHitVector dy0 = StripHitVector::Zero();
-//               dy0[0] = StripHitScalar(dy0eig[0]);
-// 
-//               const Matrix<StripHitScalar, 2, 2> rot = eigensolver.eigenvectors().transpose().cast<StripHitScalar>();
-// 
-//               
-//               const StripGeomDetUnit* sgu = static_cast<const StripGeomDetUnit*>(preciseHit->det());
-//               const TkRadialStripTopology *topol = dynamic_cast<const TkRadialStripTopology*>(&sgu->specificType().specificTopology());
-//               
-//               if (topol) {
-//                 std::cout << "yCentreOfStripPlane " << topol->yCentreOfStripPlane() << std::endl;
-//                 std::cout << "originToIntersection " << topol->originToIntersection() << std::endl;
-//                 std::cout << "yExtentOfStripPlane " << topol->yExtentOfStripPlane() << std::endl;
-//                 std::cout << "phiOfOneEdge " << topol->phiOfOneEdge() << std::endl;
-//                 
-//                 
-// //                 const double lx = preciseHit->localPosition().x();
-// //                 const double ly = topol->yDistanceToIntersection(preciseHit->localPosition().y());
-// //                 const double phi =  std::atan(lx/ly);
-// //                 std::cout << "cosphi: " << std::cos(phi) << " sinphi: " << std::sin(phi) << std::endl;
-// //                 std::cout << "eigenvector 0" << std::endl;
-// //                 std::cout << eigensolver.eigenvectors().col(0) << std::endl;
-//               }
-              
-              // measurement perpendicular to strip only
-              // based on "The Inverse Problem" from CMS TN-1995/170
-//               const double q = 2.*iV(0,1)/(iV(0,0)-iV(1,1));
-//               const double tanalpha = q/(1.+std::sqrt(1.+q*q));
-//               const double sigl2 = 0.5*(iV.trace() + std::sqrt(std::pow(iV(0,0) - iV(1,1), 2) + 4.*iV(0,1)*iV(0,1)));
-//               const double sigp2 = iV.determinant()/sigl2;
-//               
-//               const double cosalpha = 1./std::sqrt(1. + tanalpha*tanalpha);
-//               const double sinalpha = tanalpha*cosalpha;
-//               
-//               // rotation matrix from local coordinates to components perpendicular and parallel to strip
-//               Matrix2d Rinv;
-//               Rinv << cosalpha, sinalpha,
-//                       -sinalpha, cosalpha;
-//                       
-//               Matrix<double, 2, 1> dy0local;
-//               dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
-//               dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
-//               
-//               const Matrix<double, 2, 1> dy0strip = Rinv*dy0local;
-//               
-//               StripHit2DCovariance Vinv = StripHit2DCovariance::Zero();
-//               Vinv(0,0) = StripHitScalar(1./sigp2);
-//               
-//               StripHitVector dy0 = StripHitVector::Zero();
-//               dy0[0] = StripHitScalar(dy0strip[0]);
-// 
-//               const Matrix<StripHitScalar, 2, 2> rot = Rinv.cast<StripHitScalar>();
-              
-//               std::cout << "cosalpha " << cosalpha << std::endl;
-//               std::cout << "sinalpha " << sinalpha << std::endl;
-//               std::cout << "sigl2 " << sigl2 << std::endl;
-//               std::cout << "sigp2 " << sigp2 << std::endl;
-//               std::cout << "dy0local" << std::endl;
-//               std::cout << dy0local << std::endl;
-//               std::cout << "dy0strip" << std::endl;
-//               std::cout << dy0strip << std::endl;
-              
-              StripHitVector dx = StripHitVector::Zero();
-              StripHitScalar dbeta(0.);
-              if (!genconstraint) {
-                for (unsigned int j=0; j<dx.size(); ++j) {
-                  init_twice_active_var(dx[j], nlocal, localstateidx + j);
-                }
-              }
-              else {
-                init_twice_active_var(dbeta, nlocal, localstateidx);
-                dx = Bpref.cast<StripHitScalar>()*dbeta;
-              }
-              
-              StripHitScalar dalpha(0.);
-              init_twice_active_var(dalpha, nlocal, localalignmentidx);
-
-              Matrix<StripHitScalar, 2, 1> A = Matrix<StripHitScalar, 2, 1>::Zero();
-              A(0,0) = StripHitScalar(1.);
-              
-//               const StripHit2DJacobian H = jacheig.bottomRightCorner<2,2>().cast<StripHitScalar>();
-
-//               StripHitScalar qhit(updtsos.charge());
-              
-//               StripHitVector dh = dy0 - rot*dx - A*dalpha;
-              StripHitVector dh = dy0 - Hu*dx - A*dalpha;
-              StripHitScalar chisq = dh.transpose()*Vinv*dh;
-
-              auto const& gradlocal = chisq.value().derivatives();
-              //fill local hessian
-              Matrix<double, nlocal, nlocal> hesslocal;
-              for (unsigned int j=0; j<nlocal; ++j) {
-                hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-              }
-              
-              //fill global gradient
-              gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
-              gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
-
-              //fill global hessian (upper triangular blocks only)
-              hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-              hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-              hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
-              
-              const unsigned int xglobalidx = detidparms.at(std::make_pair(0,preciseHit->geographicalId()));
-              globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
-              alignmentparmidx++;
-              
+          //fill global hessian (upper triangular blocks only)
+          hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
+          hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
+          hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
+          
+          for (unsigned int idim=0; idim<3; ++idim) {
+            const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, preciseHit->geographicalId()));
+            globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
+            alignmentparmidx++;
+            if (idim==0) {
               hitidxv.push_back(xglobalidx);
             }
           }
+          
         }
       }
       
@@ -3079,13 +2555,15 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
     if (GeomDetEnumerators::isTracker(det->subDetector())) {
       //always have parameters for local x alignment, bfield, and e-loss
       parmset.emplace(0, det->geographicalId());
+      parmset.emplace(1, det->geographicalId());
       parmset.emplace(2, det->geographicalId());
       parmset.emplace(3, det->geographicalId());
+      parmset.emplace(4, det->geographicalId());
 //       if (GeomDetEnumerators::isTrackerPixel(det->subDetector()) || GeomDetEnumerators::isEndcap(det->subDetector())) {
-      if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
-        //local y alignment parameters only for pixels for now
-        parmset.emplace(1, det->geographicalId());
-      }
+//       if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
+//         //local y alignment parameters only for pixels for now
+//         parmset.emplace(1, det->geographicalId());
+//       }
     }
   }
   
