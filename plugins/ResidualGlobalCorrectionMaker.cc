@@ -912,8 +912,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         nvalid += 1;
         
         const GeomDet *detectorG = globalGeometry->idToDet(hit->geographicalId());
-//         if (hit->dimension()==2 && GeomDetEnumerators::isTrackerPixel(detectorG->subDetector())) {
-        if (hit->dimension()==2) {
+        if (hit->dimension()==2 && GeomDetEnumerators::isTrackerPixel(detectorG->subDetector())) {
+//         if (hit->dimension()==2) {
           nvalidpixel += 1;
         }
       }
@@ -1995,8 +1995,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //             std::cout << "iV eigenvalues" << std::endl;
 //             std::cout << eigensolver.eigenvalues() << std::endl;
                   
-//             if (ispixel) {
-            if (true) {
+            if (ispixel) {
+//             if (true) {
               constexpr unsigned int nlocalalignment = 2;
               constexpr unsigned int nlocalparms = nlocalalignment;
               constexpr unsigned int nlocal = nlocalstate + nlocalparms;
@@ -3038,7 +3038,8 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
       parmset.emplace(0, det->geographicalId());
       parmset.emplace(2, det->geographicalId());
       parmset.emplace(3, det->geographicalId());
-      if (GeomDetEnumerators::isTrackerPixel(det->subDetector()) || GeomDetEnumerators::isEndcap(det->subDetector())) {
+//       if (GeomDetEnumerators::isTrackerPixel(det->subDetector()) || GeomDetEnumerators::isEndcap(det->subDetector())) {
+      if (GeomDetEnumerators::isTrackerPixel(det->subDetector())) {
         //local y alignment parameters only for pixels for now
         parmset.emplace(1, det->geographicalId());
       }
