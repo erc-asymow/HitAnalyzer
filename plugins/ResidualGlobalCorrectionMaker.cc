@@ -182,6 +182,10 @@ private:
                                               const std::pair<TrajectoryStateOnSurface, double>& propresult,
                                               bool doReverse = false) const;
 
+  Matrix<double, 5, 6> curv2curvTransportJacobian(const FreeTrajectoryState& start,
+                                              const std::pair<TrajectoryStateOnSurface, double>& propresult,
+                                              bool doReverse = false) const;
+                                              
   Matrix<double, 5, 6> curvtransportJacobian(const GlobalTrajectoryParameters& globalSource,
                                                              const GlobalTrajectoryParameters& globalDest,
                                                              const double& s,
@@ -372,7 +376,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
     }
   }
   
-  debugprintout_ = false;
+  debugprintout_ = true;
 
 
 //   fout = new TFile("trackTreeGrads.root", "RECREATE");
@@ -1296,7 +1300,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
 //       std::cout << "position on beampipe " << propresult.first.globalParameters().position() << std::endl;
       
-      const Matrix<double, 5, 6> FdFp = curv2localTransportJacobian(refFts, propresult, false);
+      const Matrix<double, 5, 6> FdFp = curv2curvTransportJacobian(refFts, propresult, false);
 
       Matrix<double, 2, 2> J = FdFp.block<2, 2>(3, 3);
       // (du/dalphap)^-1
@@ -1322,7 +1326,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       // dsz
       statejac(jacstateidxout + 4, jacstateidxin + 1) = 1.;
       
-      Matrix<double, 5, 6> FdFm = curv2localTransportJacobian(refFts, propresult, true);
+      Matrix<double, 5, 6> FdFm = curv2curvTransportJacobian(refFts, propresult, true);
       
       for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
 //         std::cout << "ihit " << ihit << std::endl;
@@ -1341,6 +1345,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         // compute convolution correction in local coordinates (BEFORE material effects are applied)
 //         const Matrix<double, 2, 1> dxlocalconv = localPositionConvolution(updtsos);
          
+        // curvilinear to local jacobian
+        JacobianCurvilinearToLocal curv2localm(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
+        const AlgebraicMatrix55& curv2localjacm = curv2localm.jacobian();
+        const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
+        
         //energy loss jacobian
         const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
        
@@ -1401,8 +1410,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         std::cout<< Q << std::endl;
         
 
-        
-        
+        // FIXME this is not valid for multiple iterations
+        // curvilinear to local jacobian
+        JacobianCurvilinearToLocal curv2localp(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
+        const AlgebraicMatrix55& curv2localjacp = curv2localp.jacobian();
+        const Matrix<double, 5, 5> Hp = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacp.Array()); 
         
 
         //FIXME take care of this elsewhere for the moment
@@ -1417,6 +1429,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             layerStates.push_back(updtsos);
           }
           else {
+            //FIXME this is not valid for the updated parameterization
+            
             //current state from previous state on this layer
             //save current parameters          
             TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
@@ -1440,6 +1454,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           }
           
           const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
+          
 
 //           if (ihit==0) {
 //             FreeTrajectoryState tmpfts(updtsospos, updtsos.globalParameters().momentum(), updtsos.charge(), field);
@@ -1458,7 +1473,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           if (true) {
 //           if (false) {
             //forward propagation jacobian (local to local)
-            const Matrix<double, 5, 6> FdFp = localTransportJacobian(updtsos, propresult, false);
+            const Matrix<double, 5, 6> FdFp = curv2curvTransportJacobian(*updtsos.freeState(), propresult, false);
 
             Matrix<double, 2, 2> J = FdFp.block<2, 2>(3, 3);
             // (du/dalphap)^-1
@@ -1635,16 +1650,31 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             //multiple scattering kink term
             
-            const Matrix<MSScalar, 2, 1> dalpha0 = dx0.segment<2>(1).cast<MSScalar>();
+            Matrix<MSScalar, 2, 2> Halphalamphim = Hm.block<2,2>(1, 1).cast<MSScalar>();
+            Matrix<MSScalar, 2, 2> Halphaum = Hm.block<2,2>(1, 3).cast<MSScalar>();
             
-            const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
-            const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop - Bp*dbetap);
+            Matrix<MSScalar, 2, 2> Halphalamphip = Hp.block<2,2>(1, 1).cast<MSScalar>();
+            Matrix<MSScalar, 2, 2> Halphaup = Hp.block<2,2>(1, 3).cast<MSScalar>();
+            
+            const Matrix<MSScalar, 2, 1> dalpha0 = dx0.segment<2>(1).cast<MSScalar>();
+   
+            const Matrix<MSScalar, 2, 1> dlamphim = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
+            const Matrix<MSScalar, 2, 1> dlamphip = Sinvp*(dup - Jp*du - Dp*dqop - Bp*dbetap);
+            
+            const Matrix<MSScalar, 2, 1> dalpham = Halphalamphim*dlamphim + Halphaum*du;
+            const Matrix<MSScalar, 2, 1> dalphap = Halphalamphip*dlamphip + Halphaup*du;
+            
+            
+//             const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
+//             const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop - Bp*dbetap);
 //             const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm);
 //             const Matrix<MSScalar, 2, 1> dalphap = Sinvp*(dup - Jp*du - Dp*dqop);
             
             
             const MSScalar deloss0(dx0[0]);
 
+            
+            
             
 //             const Matrix<MSScalar, 2, 1> dms = dalpha0 + dalphap - dalpham;
 //             const MSScalar chisqms = dms.transpose()*Qinvms*dms;
@@ -1867,7 +1897,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           }
                     
           //backwards propagation jacobian (local to local) to be used at the next layer
-          FdFm = localTransportJacobian(updtsos, propresult, true);
+          FdFm = curv2curvTransportJacobian(*updtsos.freeState(), propresult, true);
           
         }
         
@@ -1897,6 +1927,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             constexpr unsigned int nlocalalignment = 1;
             constexpr unsigned int nlocalparms = nlocalalignment;
             constexpr unsigned int nlocal = nlocalstate + nlocalparms;
+            
+            const Matrix<StripHitScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<StripHitScalar>();
             
             const StripHitScalar dy0(preciseHit->localPosition().x() - updtsos.localPosition().x());
             const StripHitScalar Vinv(1./preciseHit->localPositionError().xx());
@@ -1957,7 +1989,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
 //             StripHitScalar qhit(updtsos.charge());
             
-            StripHitScalar dh = dy0 - dx[0] - A*dalpha;
+            StripHitScalar dh = dy0 - (Hu*dx)[0] - A*dalpha;
             StripHitScalar chisq = dh*dh*Vinv;
             
             auto const& gradlocal = chisq.value().derivatives();
@@ -2000,6 +2032,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               constexpr unsigned int nlocalalignment = 2;
               constexpr unsigned int nlocalparms = nlocalalignment;
               constexpr unsigned int nlocal = nlocalstate + nlocalparms;
+              
+              const Matrix<PixelHit2DScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<PixelHit2DScalar>();
               
               PixelHit2DVector dy0;
               dy0[0] = PixelHit2DScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
@@ -2090,7 +2124,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
 //               PixelHit2DScalar qhit(updtsos.charge());
               
-              const PixelHit2DVector dh = dy0 - dx - A*dalpha;
+              const PixelHit2DVector dh = dy0 - Hu*dx - A*dalpha;
               const PixelHit2DScalar chisq = dh.transpose()*Vinv*dh;
               
               auto const& gradlocal = chisq.value().derivatives();
@@ -2160,6 +2194,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //               Vinv(0,0) = StripHitScalar(1./eigensolver.eigenvalues()[0]);
 //               Vinv(1,1) = StripHitScalar(1./eigensolver.eigenvalues()[1]);
               const StripHit2DCovariance Vinv = iV.inverse().cast<StripHitScalar>();
+              
+              const Matrix<StripHitScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<StripHitScalar>();
               
               StripHitVector dy0 = StripHitVector::Zero();
 //               dy0[0] = StripHitScalar(dy0eig[0]);
@@ -2544,7 +2580,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //               StripHitScalar qhit(updtsos.charge());
               
 //               StripHitVector dh = dy0 - rot*dx - A*dalpha;
-              StripHitVector dh = dy0 - dx - A*dalpha;
+              StripHitVector dh = dy0 - Hu*dx - A*dalpha;
               StripHitScalar chisq = dh.transpose()*Vinv*dh;
 
               auto const& gradlocal = chisq.value().derivatives();
@@ -3863,6 +3899,32 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::curv2localTransportJacobian(
   
   return res;
                                                 
+}
+
+Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::curv2curvTransportJacobian(const FreeTrajectoryState& start,
+                                              const std::pair<TrajectoryStateOnSurface, double>& propresult,
+                                              bool doReverse) const {
+        
+  const FreeTrajectoryState& end = *propresult.first.freeState();
+  const TrajectoryStateOnSurface& proptsos = propresult.first;
+  
+  const FreeTrajectoryState& state0 = doReverse ? end : start;
+  const FreeTrajectoryState& state1 = doReverse ? start : end;
+  const GlobalVector& h = start.parameters().magneticFieldInInverseGeV();
+  const double s = doReverse ? -propresult.second : propresult.second;
+  
+//   // compute transport jacobian wrt curvlinear parameters
+//   AnalyticalCurvilinearJacobian curv2curv;
+//   curv2curv.computeFullJacobian(state0.parameters(), state1.parameters().position(), state1.parameters().momentum(), h, s);
+//   const AlgebraicMatrix55& curv2curvjac = curv2curv.jacobian();
+//   const Matrix<double, 5, 5> F = Map<const Matrix<double, 5, 5, RowMajor>>(curv2curvjac.Array());
+//   
+//   // compute transport jacobian wrt B field (magnitude)
+//   const Matrix<double, 5, 1> dF = bfieldJacobian(state0.parameters(), state1.parameters(), s, h);
+  
+  const Matrix<double, 5, 6> FdF = curvtransportJacobian(state0.parameters(), state1.parameters(), s, h);
+
+  return FdF;
 }
 
 AlgebraicVector5 ResidualGlobalCorrectionMaker::localMSConvolution(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const {
