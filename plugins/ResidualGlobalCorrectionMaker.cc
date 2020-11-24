@@ -2741,26 +2741,26 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
 
     
-//     gradv.clear();
+    gradv.clear();
     jacrefv.clear();
 
-//     gradv.resize(npars,0.);
+    gradv.resize(npars,0.);
     jacrefv.resize(5*npars, 0.);
     
     nJacRef = 5*npars;
-//     tree->SetBranchAddress("gradv", gradv.data());
+    tree->SetBranchAddress("gradv", gradv.data());
     if (fillTrackTree_) {
       tree->SetBranchAddress("jacrefv", jacrefv.data());
     }
     
     //eigen representation of the underlying vector storage
-//     Map<VectorXf> gradout(gradv.data(), npars);
+    Map<VectorXf> gradout(gradv.data(), npars);
     Map<Matrix<float, 5, Dynamic, RowMajor> > jacrefout(jacrefv.data(), 5, npars);
     
 //     jacrefout = dxdparms.leftCols<5>().transpose().cast<float>();    
     jacrefout = (dxdparms*statejac.transpose()).leftCols<5>().transpose().cast<float>();  
     
-//     gradout = grad.cast<float>();
+    gradout = grad.cast<float>();
     
     
     float refPt = dogen ? genpart->pt() : std::abs(1./refParms[0])*std::sin(M_PI_2 - refParms[1]);
@@ -2774,35 +2774,50 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     }
     
     
-    if (gradmax < 1e5 && refPt > 5.5) {
-      //fill aggregrate gradient and hessian
-      for (unsigned int i=0; i<npars; ++i) {
-        gradagg[globalidxv[i]] += grad[i];
+    hessmax = 0.;
+    for (unsigned int i=0; i<npars; ++i) {
+      for (unsigned int j=i; j<npars; ++j) {
+        const unsigned int iidx = globalidxv[i];
+        const unsigned int jidx = globalidxv[j];
+        
+        const float absval = std::abs(hess(i,j));
+        if (absval>hessmax) {
+          hessmax = absval;
+        }
+        
       }
       
-      hessmax = 0.;
-      for (unsigned int i=0; i<npars; ++i) {
-        for (unsigned int j=i; j<npars; ++j) {
-          const unsigned int iidx = globalidxv[i];
-          const unsigned int jidx = globalidxv[j];
-          
-          const float absval = std::abs(hess(i,j));
-          if (absval>hessmax) {
-            hessmax = absval;
-          }
-          
-          const std::pair<unsigned int, unsigned int> key = std::make_pair(std::min(iidx,jidx), std::max(iidx,jidx));
-          
-          auto it = hessaggsparse.find(key);
-          if (it==hessaggsparse.end()) {
-            hessaggsparse[key] = hess(i,j);
-          }
-          else {
-            it->second += hess(i,j);
-          }
-        }
-      }
     }
+    
+//     if (gradmax < 1e5 && refPt > 5.5) {
+//       //fill aggregrate gradient and hessian
+//       for (unsigned int i=0; i<npars; ++i) {
+//         gradagg[globalidxv[i]] += grad[i];
+//       }
+//       
+//       hessmax = 0.;
+//       for (unsigned int i=0; i<npars; ++i) {
+//         for (unsigned int j=i; j<npars; ++j) {
+//           const unsigned int iidx = globalidxv[i];
+//           const unsigned int jidx = globalidxv[j];
+//           
+//           const float absval = std::abs(hess(i,j));
+//           if (absval>hessmax) {
+//             hessmax = absval;
+//           }
+//           
+//           const std::pair<unsigned int, unsigned int> key = std::make_pair(std::min(iidx,jidx), std::max(iidx,jidx));
+//           
+//           auto it = hessaggsparse.find(key);
+//           if (it==hessaggsparse.end()) {
+//             hessaggsparse[key] = hess(i,j);
+//           }
+//           else {
+//             it->second += hess(i,j);
+//           }
+//         }
+//       }
+//     }
     
     
     if (debugprintout_) {
@@ -2832,22 +2847,22 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     std::cout << (dxdparms.transpose()*d2chisqdx2*dxdparms).diagonal() << std::endl;
     
     //fill packed hessian and indices
-//     const unsigned int nsym = npars*(1+npars)/2;
-//     hesspackedv.clear();    
-//     hesspackedv.resize(nsym, 0.);
-//     
-//     nSym = nsym;
-//     tree->SetBranchAddress("hesspackedv", hesspackedv.data());
-//     
-//     Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
-//     const Map<const VectorXu> globalidx(globalidxv.data(), npars);
-// 
-//     unsigned int packedidx = 0;
-//     for (unsigned int ipar = 0; ipar < npars; ++ipar) {
-//       const unsigned int segmentsize = npars - ipar;
-//       hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
-//       packedidx += segmentsize;
-//     }
+    const unsigned int nsym = npars*(1+npars)/2;
+    hesspackedv.clear();    
+    hesspackedv.resize(nsym, 0.);
+    
+    nSym = nsym;
+    tree->SetBranchAddress("hesspackedv", hesspackedv.data());
+    
+    Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
+    const Map<const VectorXu> globalidx(globalidxv.data(), npars);
+
+    unsigned int packedidx = 0;
+    for (unsigned int ipar = 0; ipar < npars; ++ipar) {
+      const unsigned int segmentsize = npars - ipar;
+      hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
+      packedidx += segmentsize;
+    }
 
     if (fillTrackTree_) {
       tree->Fill();
@@ -2905,13 +2920,13 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("nParms", &nParms, basketSize);
     tree->Branch("nJacRef", &nJacRef, basketSize);
     
-  //   tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
+    tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
     tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
     
-  //   tree->Branch("nSym", &nSym, basketSize);
+    tree->Branch("nSym", &nSym, basketSize);
     
-  //   tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+    tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
     
     tree->Branch("run", &run);
     tree->Branch("lumi", &lumi);
@@ -2965,31 +2980,31 @@ void ResidualGlobalCorrectionMaker::endStream()
 {
   fout->cd();
   
-  TTree *gradtree = new TTree("gradtree","");
-  unsigned int idx;
-  double gradval;
-  gradtree->Branch("idx",&idx);
-  gradtree->Branch("gradval",&gradval);
-  for (unsigned int i=0; i<gradagg.size(); ++i) {
-    idx = i;
-    gradval = gradagg[i];
-    gradtree->Fill();
-  }
-  
-  TTree *hesstree = new TTree("hesstree","");
-  unsigned int iidx;
-  unsigned int jidx;
-  double hessval;
-  hesstree->Branch("iidx",&iidx);
-  hesstree->Branch("jidx",&jidx);
-  hesstree->Branch("hessval",&hessval);
-  
-  for (auto const& item : hessaggsparse) {
-    iidx = item.first.first;
-    jidx = item.first.second;
-    hessval = item.second;
-    hesstree->Fill();
-  }
+//   TTree *gradtree = new TTree("gradtree","");
+//   unsigned int idx;
+//   double gradval;
+//   gradtree->Branch("idx",&idx);
+//   gradtree->Branch("gradval",&gradval);
+//   for (unsigned int i=0; i<gradagg.size(); ++i) {
+//     idx = i;
+//     gradval = gradagg[i];
+//     gradtree->Fill();
+//   }
+//   
+//   TTree *hesstree = new TTree("hesstree","");
+//   unsigned int iidx;
+//   unsigned int jidx;
+//   double hessval;
+//   hesstree->Branch("iidx",&iidx);
+//   hesstree->Branch("jidx",&jidx);
+//   hesstree->Branch("hessval",&hessval);
+//   
+//   for (auto const& item : hessaggsparse) {
+//     iidx = item.first.first;
+//     jidx = item.first.second;
+//     hessval = item.second;
+//     hesstree->Fill();
+//   }
   
   fout->Write();
   fout->Close();
