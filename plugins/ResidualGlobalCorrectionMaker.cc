@@ -299,6 +299,7 @@ private:
   
   bool fitFromGenParms_;
   bool fillTrackTree_;
+  bool fillGrads_;
   
   bool debugprintout_;
   
@@ -359,6 +360,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
+  fillGrads_ = iConfig.getParameter<bool>("fillGrads");
   doSim_ = iConfig.getParameter<bool>("doSim");
   
   if (doSim_) {
@@ -376,7 +378,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
     }
   }
   
-  debugprintout_ = true;
+  debugprintout_ = false;
 
 
 //   fout = new TFile("trackTreeGrads.root", "RECREATE");
@@ -2784,7 +2786,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     jacrefv.resize(5*npars, 0.);
     
     nJacRef = 5*npars;
-    tree->SetBranchAddress("gradv", gradv.data());
+    if (fillTrackTree_ && fillGrads_) {
+      tree->SetBranchAddress("gradv", gradv.data());
+    }
     if (fillTrackTree_) {
       tree->SetBranchAddress("jacrefv", jacrefv.data());
     }
@@ -2888,7 +2892,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     hesspackedv.resize(nsym, 0.);
     
     nSym = nsym;
-    tree->SetBranchAddress("hesspackedv", hesspackedv.data());
+    if (fillTrackTree_ && fillGrads_) {
+      tree->SetBranchAddress("hesspackedv", hesspackedv.data());
+    }
     
     Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
     const Map<const VectorXu> globalidx(globalidxv.data(), npars);
@@ -2956,13 +2962,14 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("nParms", &nParms, basketSize);
     tree->Branch("nJacRef", &nJacRef, basketSize);
     
-    tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
     tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
     
-    tree->Branch("nSym", &nSym, basketSize);
-    
-    tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+    if (fillGrads_) {
+      tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
+      tree->Branch("nSym", &nSym, basketSize);
+      tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
+    }
     
     tree->Branch("run", &run);
     tree->Branch("lumi", &lumi);
