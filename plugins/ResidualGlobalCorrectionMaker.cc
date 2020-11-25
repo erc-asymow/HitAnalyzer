@@ -1889,11 +1889,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
-            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,hit->geographicalId()));
+            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,preciseHit->geographicalId()));
             globalidxv[parmidx] = bfieldglobalidx;
             parmidx++;
             
-            const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,hit->geographicalId()));
+            const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
             globalidxv[parmidx] = elossglobalidx;
             parmidx++;
           }
@@ -1901,6 +1901,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           //backwards propagation jacobian (local to local) to be used at the next layer
           FdFm = curv2curvTransportJacobian(*updtsos.freeState(), propresult, true);
           
+        }
+        else {
+          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
+          globalidxv[parmidx] = bfieldglobalidx;
+          parmidx++; 
         }
         
         
@@ -2610,10 +2615,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           }
         }
       }
-      
+            
       if (!valid) {
         break;
       }
+      
+      assert(parmidx == (nparsBfield + nparsEloss));
+      assert(alignmentparmidx == nparsAlignment);
       
       //fake constraint on reference point parameters
       if (dogen) {
