@@ -1903,7 +1903,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           
         }
         else {
-          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
+          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,preciseHit->geographicalId()));
           globalidxv[parmidx] = bfieldglobalidx;
           parmidx++; 
         }
