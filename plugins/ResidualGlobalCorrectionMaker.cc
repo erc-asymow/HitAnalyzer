@@ -927,10 +927,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       if (hit->isValid()) {
         nvalid += 1;
         
-        const uint32_t gluedid = trackerTopology->glued(hit->det()->geographicalId());
-        const bool isglued = gluedid != 0;
-        const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
-        const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
+//         const uint32_t gluedid = trackerTopology->glued(hit->geographicalId());
+//         const bool isglued = gluedid != 0;
+//         const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
+//         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
+        const bool align2d = detidparms.count(std::make_pair(1, hit->geographicalId()));
         
         if (align2d) {
           nvalidalign2d += 1;
@@ -1376,12 +1377,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           break;
         }
         
-        const uint32_t gluedid = trackerTopology->glued(preciseHit->det()->geographicalId());
-        const bool isglued = gluedid != 0;
-        const DetId parmdetid = isglued ? DetId(gluedid) : preciseHit->geographicalId();
-        const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
+//         const uint32_t gluedid = trackerTopology->glued(preciseHit->det()->geographicalId());
+//         const bool isglued = gluedid != 0;
+//         const DetId parmdetid = isglued ? DetId(gluedid) : preciseHit->geographicalId();
+//         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
+//         const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : preciseHit->det();
         
-        const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : preciseHit->det();
+        const bool align2d = detidparms.count(std::make_pair(1, preciseHit->geographicalId()));
+
         
         // compute convolution correction in local coordinates (BEFORE material effects are applied)
 //         const Matrix<double, 2, 1> dxlocalconv = localPositionConvolution(updtsos);
@@ -1606,13 +1609,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   //           const MSVector dE = EdE.rightCols<1>().cast<MSScalar>();
             
             // fraction of material on this layer compared to glued layer if relevant
-            double xifraction = isglued ? preciseHit->det()->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
+//             double xifraction = isglued ? preciseHit->det()->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
             
 //             std::cout << "xifraction: " << xifraction << std::endl;
             
             const MSScalar Eqop(EdE(0,0));
             const Matrix<MSScalar, 1, 2> Ealpha = EdE.block<1, 2>(0, 1).cast<MSScalar>();
-            const MSScalar dE(xifraction*EdE(0,5));
+            const MSScalar dE(EdE(0,5));
+//             const MSScalar dE(xifraction*EdE(0,5));
 //             (void)EdE;
             
             const MSScalar muE(dxeloss[0]);
@@ -1933,11 +1937,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
-            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,parmdetid));
+            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,preciseHit->geographicalId()));
             globalidxv[parmidx] = bfieldglobalidx;
             parmidx++;
             
-            const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,parmdetid));
+            const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
             globalidxv[parmidx] = elossglobalidx;
             parmidx++;
           }
@@ -1947,7 +1951,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           
         }
         else {
-          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,parmdetid));
+          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,preciseHit->geographicalId()));
           globalidxv[parmidx] = bfieldglobalidx;
           parmidx++; 
         }
@@ -2048,24 +2052,26 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             }
 
             // rotation from alignment basis to module local coordinates
-            Matrix<AlignScalar, 2, 2> A;
-            if (isglued) {
-              const GlobalVector modx = preciseHit->det()->surface().toGlobal(LocalVector(1.,0.,0.));
-              const GlobalVector mody = preciseHit->det()->surface().toGlobal(LocalVector(0.,1.,0.));
-              
-              const GlobalVector gluedx = parmDet->surface().toGlobal(LocalVector(1.,0.,0.));
-              const GlobalVector gluedy = parmDet->surface().toGlobal(LocalVector(0.,1.,0.));
-              
-              A(0,0) = AlignScalar(modx.dot(gluedx));
-              A(0,1) = AlignScalar(modx.dot(gluedy));
-              A(1,0) = AlignScalar(mody.dot(gluedx));
-              A(1,1) = AlignScalar(mody.dot(gluedy));
-            }
-            else {
-              A = Matrix<AlignScalar, 2, 2>::Identity();
-            }
+//             Matrix<AlignScalar, 2, 2> A;
+//             if (isglued) {
+//               const GlobalVector modx = preciseHit->det()->surface().toGlobal(LocalVector(1.,0.,0.));
+//               const GlobalVector mody = preciseHit->det()->surface().toGlobal(LocalVector(0.,1.,0.));
+//               
+//               const GlobalVector gluedx = parmDet->surface().toGlobal(LocalVector(1.,0.,0.));
+//               const GlobalVector gluedy = parmDet->surface().toGlobal(LocalVector(0.,1.,0.));
+//               
+//               A(0,0) = AlignScalar(modx.dot(gluedx));
+//               A(0,1) = AlignScalar(modx.dot(gluedy));
+//               A(1,0) = AlignScalar(mody.dot(gluedx));
+//               A(1,1) = AlignScalar(mody.dot(gluedy));
+//             }
+//             else {
+//               A = Matrix<AlignScalar, 2, 2>::Identity();
+//             }
+// 
+//             Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*A*dalpha;
 
-            Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*A*dalpha;
+            Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*dalpha;
             AlignScalar chisq = dh.transpose()*Vinv*dh;
 
             auto const& gradlocal = chisq.value().derivatives();
@@ -2099,7 +2105,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner(nlocalparms, nlocalparms);
             
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
-              const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, parmdetid));
+              const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, preciseHit->geographicalId()));
               globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
               alignmentparmidx++;
               if (idim==0) {
@@ -2629,23 +2635,27 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
 //       std::cout << "detid: " << det->geographicalId().rawId() << std::endl;
       
 //       std::cout << "detid: " << det->geographicalId().rawId() << " subdet: " << det->subDetector() << " isStereo: " << trackerTopology->isStereo(det->geographicalId()) << " isRphi: " << trackerTopology->isRPhi(det->geographicalId()) << " glued: " << trackerTopology->glued(det->geographicalId()) << " stack: " << trackerTopology->stack(det->geographicalId()) << " upper: " << trackerTopology->upper(det->geographicalId()) << " lower: " << trackerTopology->lower(det->geographicalId()) << " partner: " << trackerTopology->partnerDetId(det->geographicalId()).rawId() <<" xi: " << det->surface().mediumProperties().xi() << std::endl;
-      
-      const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
-      const bool isglued = gluedid != 0;
+
       const bool ispixel = GeomDetEnumerators::isTrackerPixel(det->subDetector());
       const bool isendcap = GeomDetEnumerators::isEndcap(det->subDetector());
-      const bool align2d = ispixel || isglued || isendcap;
+
       
-      const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
+//       const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
+//       const bool isglued = gluedid != 0;
+// //       const bool align2d = ispixel || isglued || isendcap;      
+//       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
+      
+      const bool align2d = ispixel || isendcap;
+
       
       //always have parameters for local x alignment, bfield, and e-loss
-      parmset.emplace(0, parmdetid);
+      parmset.emplace(0, det->geographicalId());
       if (align2d) {
-        //local y alignment parameters only for pixels for now
-        parmset.emplace(1, parmdetid);
+        //local y alignment parameters only for pixels and disks for now
+        parmset.emplace(1, det->geographicalId());
       }
-      parmset.emplace(2, parmdetid);
-      parmset.emplace(3, parmdetid);
+      parmset.emplace(2, det->geographicalId());
+      parmset.emplace(3, det->geographicalId());
     }
   }
   
@@ -4341,110 +4351,6 @@ void ResidualGlobalCorrectionMaker::init_twice_active_null(T &ad, const unsigned
     ad.derivatives()(idx).derivatives()  = T::DerType::Scalar::DerType::Zero(d_num);
   }
 }
-
-// template<unsigned int Nalign>
-// void ResidualGlobalCorrectionMaker::fillAlignGrads(const TrackingRecHit* hit, const PSimHit* simHit, const TrajectoryStateOnSurface &updtsos, const Matrix<double, 5, 5>& Hp, const GlobalTrackingGeometry* trackingGeometry, const TrackerTopology *trackerTopology, VectorXd& gradfull, MatrixXd& hessfull, unsigned int fullstateidx, unsigned int fullparmidx, bool genconstraint) {
-//   constexpr unsigned int nlocalstate = 2;
-//   constexpr unsigned int localstateidx = 0;
-//   constexpr unsigned int localalignmentidx = nlocalstate;
-//   constexpr unsigned int localparmidx = localalignmentidx;
-//   
-//   constexpr unsigned int nlocalalignment = Nalign;
-//   constexpr unsigned int nlocalparms = nlocalalignment;
-//   constexpr unsigned int nlocal = nlocalstate + nlocalparms;
-//   
-//   using AlignScalar = AANT<double, nlocal>;
-//   
-//   const bool ispixel = GeomDetEnumerators::isTrackerPixel(preciseHit->det()->subDetector());
-//   
-//   //TODO add hit validation stuff
-//   //TODO add simhit stuff
-//   
-//   Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
-//   
-//   Matrix<AlignScaler, 2, 1> dy0;
-//   Matrix<AlignScalar, 2, 2> Vinv;
-//   if (hit->dimension() == 1) {
-//     dy0[0] = AlignScalar(hit->localPosition().x() - updtsos.localPosition().x());
-//     dy0[1] = AlignScalar(0.);
-//     
-//     Vinv = Matrix<AlignScalar, 2, 2>::Zero();
-//     Vinv(0,0) = 1./hit->localPositionError().xx();
-//   }
-//   else {
-//     // 2d hit
-//     Matrix2d iV;
-//     iV << preciseHit->localPositionError().xx(), preciseHit->localPositionError().xy(),
-//           preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
-//     if (ispixel) {
-//       //take 2d hit as-is for pixels
-//       dy0[0] = AlignScalar(hit->localPosition().x() - updtsos.localPosition().x());
-//       dy0[1] = AlignScalar(hit->localPosition().y() - updtsos.localPosition().y());
-//       
-//       Vinv = iV.inverse().cast<AlignScalar>();
-//     }
-//     else {
-//       // diagonalize and take only smallest eigenvalue for 2d hits in strip wedge modules,
-//       // since the constraint parallel to the strip is spurious
-//       SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
-//       
-//       Matrix<double, 2, 1> dy0local;
-//       dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
-//       dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
-//       
-//       const Matrix<double, 2, 1> dy0eig = v.transpose()*dy0local;
-//       
-//       //TODO deal properly with rotations (rotate back to module local coords?)
-//       dy0[0] = AlignScalar(dy0eig[0]);
-//       dy0[1] = AlignScalar(0.);
-//       
-//       Vinv = Matrix<AlignScalar, 2, 2>::Zero();
-//       Vinv(0,0) = AlignScalar(1./v.eigenvalues()[0]);      
-//     }
-//   }
-//   
-//   
-//   Matrix<AlignScalar, 2, 1> dx = Matrix<AlignScalar, 2, 1>::Zero();
-//   AlignScalar dbeta(0.);
-//   if (!genconstraint) {
-//     for (unsigned int j=0; j<dx.size(); ++j) {
-//       init_twice_active_var(dx[j], nlocal, localstateidx + j);
-//     }
-//   }
-//   else {
-//     init_twice_active_var(dbeta, nlocal, localstateidx);
-//     dx = Bpref.cast<AlignScalar>()*dbeta;
-//   }
-//   
-//   Matrix<AlignScalar, 2, 1> dalpha = Matrix<AlignScalar, 2, 1>::Zero();
-//   for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
-//     init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
-//   }
-// 
-//   // TODO deal properly with rotations
-//   Matrix<AlignScalar, 2, 2> A = Matrix<StripHitScalar, 2, 1>::Identity();
-//   
-//   Matrix<AlignScalar, 2, 1> dh = dy0 - Hu*dx - A*dalpha;
-//   AlignScalar chisq = dh.transpose()*Vinv*dh;
-// 
-//   auto const& gradlocal = chisq.value().derivatives();
-//   //fill local hessian
-//   Matrix<double, nlocal, nlocal> hesslocal;
-//   for (unsigned int j=0; j<nlocal; ++j) {
-//     hesslocal.row(j) = chisq.derivatives()[j].derivatives();
-//   }
-//   
-//   //fill global gradient
-//   gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
-//   gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
-// 
-//   //fill global hessian (upper triangular blocks only)
-//   hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-//   hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-//   hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
-//   
-//   
-// }
 
 //define this as a plug-in
 DEFINE_FWK_MODULE(ResidualGlobalCorrectionMaker);
