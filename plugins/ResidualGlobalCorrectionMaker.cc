@@ -2657,7 +2657,8 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
 // //       const bool align2d = ispixel || isglued || isendcap;      
 //       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
-      const bool align2d = ispixel || isendcap;
+//       const bool align2d = ispixel || isendcap;
+      const bool align2d = true;
 
       
       //always have parameters for local x alignment, bfield, and e-loss
