@@ -931,7 +931,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         const bool isglued = gluedid != 0;
 //         const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
 //         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
-        const bool align2d = detidparms.count(std::make_pair(1, hit->geographicalId()));
+        const bool align2d = detidparms.count(std::make_pair(2, hit->geographicalId()));
         
         if (align2d) {
           nvalidalign2d += 1;
@@ -964,7 +964,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     const unsigned int nparsAlignment = nstriphits + 2*npixhits;
 //     const unsigned int nvalidstrip = nvalid - nvalidpixel;
 //     const unsigned int nparsAlignment = nvalidstrip + 2*nvalidpixel;
-    const unsigned int nparsAlignment = nvalid + nvalidalign2d;
+    const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits - 1;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
@@ -1383,7 +1383,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
 //         const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : preciseHit->det();
         
-        const bool align2d = detidparms.count(std::make_pair(1, preciseHit->geographicalId()));
+        const bool align2d = detidparms.count(std::make_pair(2, preciseHit->geographicalId()));
 
         
         // compute convolution correction in local coordinates (BEFORE material effects are applied)
@@ -1937,11 +1937,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
-            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,preciseHit->geographicalId()));
+            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
             globalidxv[parmidx] = bfieldglobalidx;
             parmidx++;
             
-            const unsigned int elossglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
+            const unsigned int elossglobalidx = detidparms.at(std::make_pair(4,preciseHit->geographicalId()));
             globalidxv[parmidx] = elossglobalidx;
             parmidx++;
           }
@@ -1951,7 +1951,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           
         }
         else {
-          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(2,preciseHit->geographicalId()));
+          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
           globalidxv[parmidx] = bfieldglobalidx;
           parmidx++; 
         }
@@ -2046,10 +2046,22 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               dx = Bpref.cast<AlignScalar>()*dbeta;
             }
 
-            Matrix<AlignScalar, 2, 1> dalpha = Matrix<AlignScalar, 2, 1>::Zero();
+            Matrix<AlignScalar, 3, 1> dalpha = Matrix<AlignScalar, 3, 1>::Zero();
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
               init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
             }
+            
+            // alignment jacobian
+            Matrix<AlignScalar, 2, 3> A = Matrix<AlignScalar, 2, 3>::Zero();
+            // dx/dtheta
+            A(0,0) = -updtsos.localPosition().y();
+            // dy/dtheta
+            A(1,0) = updtsos.localPosition().x();
+            // dx/dx
+            A(0,1) = AlignScalar(1.);
+            // dy/dy
+            A(1,2) = AlignScalar(1.);
+            
 
             // rotation from alignment basis to module local coordinates
 //             Matrix<AlignScalar, 2, 2> A;
@@ -2071,7 +2083,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 // 
 //             Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*A*dalpha;
 
-            Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*dalpha;
+            Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*A*dalpha;
             AlignScalar chisq = dh.transpose()*Vinv*dh;
 
             auto const& gradlocal = chisq.value().derivatives();
@@ -2147,10 +2159,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           };
                     
           if (align2d) {
-            fillAlignGrads(std::integral_constant<unsigned int, 2>());
+            fillAlignGrads(std::integral_constant<unsigned int, 3>());
           }
           else {
-            fillAlignGrads(std::integral_constant<unsigned int, 1>());
+            fillAlignGrads(std::integral_constant<unsigned int, 2>());
           }
             
         }
@@ -2650,12 +2662,13 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
       
       //always have parameters for local x alignment, bfield, and e-loss
       parmset.emplace(0, det->geographicalId());
+      parmset.emplace(1, det->geographicalId());
       if (align2d) {
         //local y alignment parameters only for pixels and disks for now
-        parmset.emplace(1, det->geographicalId());
+        parmset.emplace(2, det->geographicalId());
       }
-      parmset.emplace(2, det->geographicalId());
       parmset.emplace(3, det->geographicalId());
+      parmset.emplace(4, det->geographicalId());
     }
   }
   
