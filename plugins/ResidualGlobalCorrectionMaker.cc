@@ -287,6 +287,16 @@ private:
   std::vector<float> dxrecsim;
   std::vector<float> dyrecsim;
   
+  std::vector<float> dxreccluster;
+  std::vector<float> dyreccluster;
+  
+  
+  std::vector<float> localqop;
+  std::vector<float> localdxdz;
+  std::vector<float> localdydz;
+  std::vector<float> localx;
+  std::vector<float> localy;
+  
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
   
   unsigned int run;
@@ -422,8 +432,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
   // loop over gen particles
 
-  edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
-  iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+//   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
+//   iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+  
+  edm::ESHandle<TrackerGeometry> globalGeometry;
+  iSetup.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
   
   edm::ESHandle<TrackerTopology> trackerTopology;
   iSetup.get<TrackerTopologyRcd>().get(trackerTopology);
@@ -919,7 +932,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
     unsigned int nvalid = 0;
     unsigned int nvalidpixel = 0;
-    unsigned int nvalidalign2d = 0;
+//     unsigned int nvalidalign2d = 0;
     
     // count valid hits since this is needed to size the arrays
     for (auto const& hit : hits) {
@@ -931,11 +944,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         const bool isglued = gluedid != 0;
 //         const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
 //         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
-        const bool align2d = detidparms.count(std::make_pair(2, hit->geographicalId()));
-        
-        if (align2d) {
-          nvalidalign2d += 1;
-        }
+//         const bool align2d = detidparms.count(std::make_pair(2, hit->geographicalId()));
+//         
+//         if (align2d) {
+//           nvalidalign2d += 1;
+//         }
         if (GeomDetEnumerators::isTrackerPixel(hit->det()->subDetector())) {
           nvalidpixel += 1;
         }
@@ -964,7 +977,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     const unsigned int nparsAlignment = nstriphits + 2*npixhits;
 //     const unsigned int nvalidstrip = nvalid - nvalidpixel;
 //     const unsigned int nparsAlignment = nvalidstrip + 2*nvalidpixel;
-    const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
+//     const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
+    const unsigned int nparsAlignment = 6*nvalid;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits - 1;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
@@ -1260,6 +1274,24 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       dyrecsim.clear();
       dyrecsim.reserve(nvalid);
+      
+      dxreccluster.clear();
+      dxreccluster.reserve(nvalid);
+      
+      dyreccluster.clear();
+      dyreccluster.reserve(nvalid);
+      
+      localqop.clear();
+      localdxdz.clear();
+      localdydz.clear();
+      localx.clear();
+      localy.clear();
+
+      localqop.reserve(nvalid);
+      localdxdz.reserve(nvalid);
+      localdydz.reserve(nvalid);
+      localx.reserve(nvalid);
+      localy.reserve(nvalid);      
       
         
       const bool islikelihood = iiter > 0;
@@ -1937,11 +1969,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
-            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
+            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6,preciseHit->geographicalId()));
             globalidxv[parmidx] = bfieldglobalidx;
             parmidx++;
             
-            const unsigned int elossglobalidx = detidparms.at(std::make_pair(4,preciseHit->geographicalId()));
+            const unsigned int elossglobalidx = detidparms.at(std::make_pair(7,preciseHit->geographicalId()));
             globalidxv[parmidx] = elossglobalidx;
             parmidx++;
           }
@@ -1951,7 +1983,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           
         }
         else {
-          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(3,preciseHit->geographicalId()));
+          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6,preciseHit->geographicalId()));
           globalidxv[parmidx] = bfieldglobalidx;
           parmidx++; 
         }
@@ -1987,7 +2019,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             Matrix<AlignScalar, 2, 1> dy0;
             Matrix<AlignScalar, 2, 2> Vinv;
             // rotation from module to strip coordinates
-            Matrix<AlignScalar, 2, 2> R;
+//             Matrix<AlignScalar, 2, 2> R;
+            Matrix2d R;
             if (preciseHit->dimension() == 1) {
               dy0[0] = AlignScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
               dy0[1] = AlignScalar(0.);
@@ -1995,7 +2028,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               Vinv = Matrix<AlignScalar, 2, 2>::Zero();
               Vinv(0,0) = 1./preciseHit->localPositionError().xx();
               
-              R = Matrix<AlignScalar, 2, 2>::Identity();
+//               R = Matrix<AlignScalar, 2, 2>::Identity();
+              R = Matrix2d::Identity();
             }
             else {
               // 2d hit
@@ -2009,7 +2043,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 
                 Vinv = iV.inverse().cast<AlignScalar>();
                 
-                R = Matrix<AlignScalar, 2, 2>::Identity();
+//                 R = Matrix<AlignScalar, 2, 2>::Identity();
+                R = Matrix2d::Identity();
               }
               else {
                 // diagonalize and take only smallest eigenvalue for 2d hits in strip wedge modules,
@@ -2030,9 +2065,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 Vinv = Matrix<AlignScalar, 2, 2>::Zero();
                 Vinv(0,0) = AlignScalar(1./eigensolver.eigenvalues()[0]);      
                 
-                R = v.transpose().cast<AlignScalar>();
+//                 R = v.transpose().cast<AlignScalar>();
+                R = v.transpose();
               }
             }
+            
+            const Matrix<AlignScalar, 2, 2> Ralign = R.cast<AlignScalar>();
             
             Matrix<AlignScalar, 2, 1> dx = Matrix<AlignScalar, 2, 1>::Zero();
             AlignScalar dbeta(0.);
@@ -2046,23 +2084,39 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               dx = Bpref.cast<AlignScalar>()*dbeta;
             }
 
-            Matrix<AlignScalar, 3, 1> dalpha = Matrix<AlignScalar, 3, 1>::Zero();
+            Matrix<AlignScalar, 6, 1> dalpha = Matrix<AlignScalar, 6, 1>::Zero();
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
               init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
             }
             
             // alignment jacobian
-            Matrix<AlignScalar, 2, 3> A = Matrix<AlignScalar, 2, 3>::Zero();
-            // dx/dtheta
-            A(0,0) = -updtsos.localPosition().y();
-            // dy/dtheta
-            A(1,0) = updtsos.localPosition().x();
-            // dx/dx
-            A(0,1) = AlignScalar(1.);
-            // dy/dy
-            A(1,2) = AlignScalar(1.);
-            
+            Matrix<AlignScalar, 2, 6> A = Matrix<AlignScalar, 2, 6>::Zero();
 
+                        
+            // dx/dx
+            A(0,0) = AlignScalar(1.);
+            // dy/dy
+            A(1,1) = AlignScalar(1.);
+            // dx/dz
+            A(0,2) = updtsos.localParameters().dxdz();
+            // dy/dz
+            A(1,2) = updtsos.localParameters().dydz();
+            // dx/dtheta_x
+            A(0,3) = -updtsos.localPosition().y()*updtsos.localParameters().dxdz();
+            // dy/dtheta_x
+            A(1,3) = -updtsos.localPosition().y()*updtsos.localParameters().dydz();
+            // dx/dtheta_y
+            A(0,4) = -updtsos.localPosition().x()*updtsos.localParameters().dxdz();
+            // dy/dtheta_y
+            A(1,4) = -updtsos.localPosition().x()*updtsos.localParameters().dydz();
+            // dx/dtheta_z
+            A(0,5) = -updtsos.localPosition().y();
+            // dy/dtheta_z
+            A(1,5) = updtsos.localPosition().x();
+            
+            
+//             std::cout << "strip local z shift gradient: " << (Ralign*A.col(2))[0].value().value() << std::endl;
+            
             // rotation from alignment basis to module local coordinates
 //             Matrix<AlignScalar, 2, 2> A;
 //             if (isglued) {
@@ -2083,7 +2137,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 // 
 //             Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*A*dalpha;
 
-            Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*A*dalpha;
+            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
             AlignScalar chisq = dh.transpose()*Vinv*dh;
 
             auto const& gradlocal = chisq.value().derivatives();
@@ -2126,19 +2180,55 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             }
             
             // fill hit validation information
-            dxrecgen.push_back(dy0[0].value().value());
-            dyrecgen.push_back(dy0[1].value().value());
+            Vector2d dyrecgenlocal;
+            dyrecgenlocal << dy0[0].value().value(), dy0[1].value().value();
+            const Vector2d dyrecgeneig = R*dyrecgenlocal;
+            dxrecgen.push_back(dyrecgeneig[0]);
+            dyrecgen.push_back(dyrecgeneig[1]);
 
+            localqop.push_back(updtsos.localParameters().qbp());
+            localdxdz.push_back(updtsos.localParameters().dxdz());
+            localdydz.push_back(updtsos.localParameters().dydz());
+            localx.push_back(updtsos.localPosition().x());
+            localy.push_back(updtsos.localPosition().y());
+            
+            const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(preciseHit.get());
+            assert(tkhit != nullptr);
+            
+//             if (ispixel) {
+//               const SiPixelCluster& cluster = *tkhit->cluster_pixel();
+//               dxreccluster.push_back(cluster.x() - preciseHit->localPosition().x());
+//               dyreccluster.push_back(cluster.y() - preciseHit->localPosition().y());
+//             }
+//             else {
+//               dxreccluster.push_back(-99.);
+//               dyreccluster.push_back(-99.);
+//             }
+            
             if (doSim_) {
               bool simvalid = false;
               for (auto const& simhith : simHits) {
                 for (const PSimHit& simHit : *simhith) {
                   if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
-                    dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
-                    dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
+                    Vector2d dysimgenlocal;
+                    dysimgenlocal << simHit.localPosition().x() - updtsos.localPosition().x(),
+                                    simHit.localPosition().y() - updtsos.localPosition().y();
+                    const Vector2d dysimgeneig = R*dysimgenlocal;
+                    dxsimgen.push_back(dysimgeneig[0]);
+                    dysimgen.push_back(dysimgeneig[1]);
+//                     dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
+//                     dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
                     
-                    dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
-                    dyrecsim.push_back(preciseHit->localPosition().y() - simHit.localPosition().y());
+                    
+                    Vector2d dyrecsimlocal;
+                    dyrecsimlocal << preciseHit->localPosition().x() - simHit.localPosition().x(),
+                                    preciseHit->localPosition().y() - simHit.localPosition().y();
+                    const Vector2d dyrecsimeig = R*dyrecsimlocal;
+                    dxrecsim.push_back(dyrecsimeig[0]);
+                    dyrecsim.push_back(dyrecsimeig[1]);
+                                    
+//                     dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
+//                     dyrecsim.push_back(preciseHit->localPosition().y() - simHit.localPosition().y());
                     
                     simvalid = true;
                     break;
@@ -2158,12 +2248,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
           };
                     
-          if (align2d) {
-            fillAlignGrads(std::integral_constant<unsigned int, 3>());
-          }
-          else {
-            fillAlignGrads(std::integral_constant<unsigned int, 2>());
-          }
+//           if (align2d) {
+//             fillAlignGrads(std::integral_constant<unsigned int, 3>());
+//           }
+//           else {
+//             fillAlignGrads(std::integral_constant<unsigned int, 2>());
+//           }
+          fillAlignGrads(std::integral_constant<unsigned int, 6>());
+          
             
         }
         
@@ -2571,6 +2663,15 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("dxrecsim", &dxrecsim);
     tree->Branch("dyrecsim", &dyrecsim);
     
+    tree->Branch("dxreccluster", &dxreccluster);
+    tree->Branch("dyreccluster", &dyreccluster);
+    
+    tree->Branch("localqop", &localqop);
+    tree->Branch("localdxdz", &localdxdz);
+    tree->Branch("localdydz", &localdydz);
+    tree->Branch("localx", &localx);
+    tree->Branch("localy", &localy);
+    
     tree->Branch("simtestz", &simtestz);
     tree->Branch("simtestzlocalref", &simtestzlocalref);
     tree->Branch("simtestdx", &simtestdx);
@@ -2628,8 +2729,11 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
     return;
   }
   
-  edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
-  es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+//   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
+//   es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+  
+  edm::ESHandle<TrackerGeometry> globalGeometry;
+  es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
   
   edm::ESHandle<TrackerTopology> trackerTopology;
   es.get<TrackerTopologyRcd>().get(trackerTopology);
@@ -2658,18 +2762,23 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
 //       const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
 //       const bool align2d = ispixel || isendcap;
-      const bool align2d = true;
+//       const bool align2d = true;
 
       
       //always have parameters for local x alignment, bfield, and e-loss
       parmset.emplace(0, det->geographicalId());
       parmset.emplace(1, det->geographicalId());
-      if (align2d) {
-        //local y alignment parameters only for pixels and disks for now
-        parmset.emplace(2, det->geographicalId());
-      }
+      parmset.emplace(2, det->geographicalId());
       parmset.emplace(3, det->geographicalId());
       parmset.emplace(4, det->geographicalId());
+      parmset.emplace(5, det->geographicalId());
+      
+//       if (align2d) {
+//         //local y alignment parameters only for pixels and disks for now
+//         parmset.emplace(2, det->geographicalId());
+//       }
+      parmset.emplace(6, det->geographicalId());
+      parmset.emplace(7, det->geographicalId());
     }
   }
   
