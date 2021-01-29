@@ -338,6 +338,9 @@ private:
   float simtestdx;
   float simtestdxrec;
   
+  std::vector<float> rx;
+  std::vector<float> ry;
+  
 //   bool filledRunTree_;
   
 };
@@ -1083,6 +1086,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     MatrixXd statejac;
     VectorXd dxstate;
     
+    Matrix<float, Dynamic, 2> rxfull(nvalid, 2); 
+    Matrix<float, Dynamic, 2> ryfull(nvalid, 2);
+    
 //     VectorXd gradfull = chisq.value().derivatives();
 //     MatrixXd hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
 //     for (unsigned int i=0; i<nstateparms; ++i) {
@@ -1328,6 +1334,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       unsigned int parmidx = 0;
       unsigned int alignmentparmidx = 0;
+      unsigned int ivalidhit = 0;
 
       if (iiter > 0) {
         //update current state from reference point state (errors not needed beyond first iteration)
@@ -2050,13 +2057,20 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 // diagonalize and take only smallest eigenvalue for 2d hits in strip wedge modules,
                 // since the constraint parallel to the strip is spurious
                 SelfAdjointEigenSolver<Matrix2d> eigensolver(iV);
-                const Matrix2d& v = eigensolver.eigenvectors();
+//                 const Matrix2d& v = eigensolver.eigenvectors();
+                R = eigensolver.eigenvectors().transpose();
+                if (R(0,0) < 0.) {
+                  R.row(0) *= -1.;
+                }
+                if (R(1,1) <0.) {
+                  R.row(1) *= -1.;
+                }
                 
                 Matrix<double, 2, 1> dy0local;
                 dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
                 dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
                 
-                const Matrix<double, 2, 1> dy0eig = v.transpose()*dy0local;
+                const Matrix<double, 2, 1> dy0eig = R*dy0local;
                 
                 //TODO deal properly with rotations (rotate back to module local coords?)
                 dy0[0] = AlignScalar(dy0eig[0]);
@@ -2066,9 +2080,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 Vinv(0,0) = AlignScalar(1./eigensolver.eigenvalues()[0]);      
                 
 //                 R = v.transpose().cast<AlignScalar>();
-                R = v.transpose();
+                
               }
             }
+            
+            rxfull.row(ivalidhit) = R.row(0).cast<float>();
+            ryfull.row(ivalidhit) = R.row(1).cast<float>();
             
             const Matrix<AlignScalar, 2, 2> Ralign = R.cast<AlignScalar>();
             
@@ -2256,6 +2273,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //           }
           fillAlignGrads(std::integral_constant<unsigned int, 6>());
           
+          ivalidhit++;
             
         }
         
@@ -2459,6 +2477,15 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     jacrefout = (dxdparms*statejac.transpose()).leftCols<5>().transpose().cast<float>();  
     
     gradout = grad.cast<float>();
+    
+    
+    rx.resize(2*nvalid);
+    Map<Matrix<float, Dynamic, 2, RowMajor> > rxout(rx.data(), nvalid, 2);
+    rxout = rxfull;
+    
+    ry.resize(2*nvalid);
+    Map<Matrix<float, Dynamic, 2, RowMajor> > ryout(ry.data(), nvalid, 2);
+    ryout = ryfull;
     
     
     float refPt = dogen ? genpart->pt() : std::abs(1./refParms[0])*std::sin(M_PI_2 - refParms[1]);
@@ -2677,6 +2704,8 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("simtestdx", &simtestdx);
     tree->Branch("simtestdxrec", &simtestdxrec);
     
+    tree->Branch("rx", &rx);
+    tree->Branch("ry", &ry);
     
     nParms = 0.;
     nJacRef = 0.;
