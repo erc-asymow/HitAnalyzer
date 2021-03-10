@@ -65,6 +65,10 @@
 #include "DataFormats/GeometrySurface/interface/Cylinder.h"
 #include "TrackingTools/GeomPropagators/interface/HelixBarrelPlaneCrossingByCircle.h"
 #include "TrackingTools/GeomPropagators/interface/HelixArbitraryPlaneCrossing.h"
+#include "CondFormats/Alignment/interface/Alignments.h"
+#include "DataFormats/TrackerRecHit2D/interface/SiPixelRecHit.h"
+#include "RecoLocalTracker/SiStripClusterizer/interface/SiStripClusterInfo.h"
+
 
 
 #include "FWCore/ServiceRegistry/interface/Service.h"
@@ -226,6 +230,9 @@ private:
 //   edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
   std::vector<edm::EDGetTokenT<std::vector<PSimHit>>> inputSimHits_;
 
+//   SiStripClusterInfo siStripClusterInfo_;
+
+  
   TFile *fout;
   TTree *tree;
 //   TTree *runtree;
@@ -245,12 +252,19 @@ private:
   float genPhi;
   float genCharge;
   
+  float genX;
+  float genY;
+  float genZ;
+  
   unsigned int nHits;
   unsigned int nValidHits;
   unsigned int nValidPixelHits;
   unsigned int nParms;
   unsigned int nJacRef;
   unsigned int nSym;
+  
+  unsigned int nValidHitsFinal;
+  unsigned int nValidPixelHitsFinal;
   
   float gradmax;
   float hessmax;
@@ -286,6 +300,19 @@ private:
   std::vector<float> dysimgen;
   std::vector<float> dxrecsim;
   std::vector<float> dyrecsim;
+  std::vector<float> dxerr;
+  std::vector<float> dyerr;
+  
+  std::vector<int> clusterSize;
+  std::vector<int> clusterSizeX;
+  std::vector<int> clusterSizeY;
+  std::vector<int> clusterCharge;
+  
+  std::vector<int> clusterChargeBin;
+  std::vector<int> clusterOnEdge;
+  
+  std::vector<float> clusterProbXY;
+  std::vector<float> clusterSN;
   
   std::vector<float> dxreccluster;
   std::vector<float> dyreccluster;
@@ -315,6 +342,8 @@ private:
   
   bool doSim_;
   
+  bool applyHitQuality_;
+  
   float dxpxb1;
   float dypxb1;
   
@@ -334,9 +363,13 @@ private:
   float simlocalyref;
   
   float simtestz;
+  float simtestvz;
   float simtestzlocalref;
+  float simtestrho;
   float simtestdx;
   float simtestdxrec;
+  float simtestdy;
+  float simtestdyrec;
   
   std::vector<float> rx;
   std::vector<float> ry;
@@ -360,11 +393,11 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 
 {
   //now do what ever initialization is needed
-  inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
+//   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
   GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
 //   inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
-  inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
-  inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
+//   inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
+//   inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
   
   
@@ -375,6 +408,7 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
   doSim_ = iConfig.getParameter<bool>("doSim");
+  applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
   
   if (doSim_) {
 //     inputSimHits_ = consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits","TrackerHitsTECLowTof"));
@@ -428,6 +462,31 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   
   using namespace edm;
 
+  Handle<reco::TrackCollection> trackOrigH;
+  iEvent.getByToken(inputTrackOrig_, trackOrigH);
+  
+  
+//   bool foundmodule = false;
+//   for (const reco::Track &track : *trackOrigH) {
+//     if (track.innerDetId() == 302055944) {
+//       foundmodule = true;
+//       break;
+//     }
+// //     for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
+// //       if ((*it)->geographicalId().rawId() == 302055944) {
+// //         foundmodule = true;
+// //         break;
+// //       }
+// //     }
+// //     if (foundmodule) {
+// //       break;
+// //     }
+//   }
+//   if (!foundmodule) {
+// //     printf("not found, returning\n");
+//     return;
+//   }
+  
   Handle<std::vector<reco::GenParticle>> genPartCollection;
   iEvent.getByToken(GenParticlesToken_, genPartCollection);
 
@@ -435,11 +494,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
   // loop over gen particles
 
-//   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
-//   iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+  edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
+  iSetup.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
   
-  edm::ESHandle<TrackerGeometry> globalGeometry;
-  iSetup.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
+//   edm::ESHandle<TrackerGeometry> globalGeometry;
+//   iSetup.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
   
   edm::ESHandle<TrackerTopology> trackerTopology;
   iSetup.get<TrackerTopologyRcd>().get(trackerTopology);
@@ -465,8 +524,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //   Handle<reco::TrackCollection> trackH;
 //   iEvent.getByToken(inputTrack_, trackH);
   
-  Handle<reco::TrackCollection> trackOrigH;
-  iEvent.getByToken(inputTrackOrig_, trackOrigH);
+
   
 //   Handle<std::vector<int> > indicesH;
 //   iEvent.getByToken(inputIndices_, indicesH);
@@ -504,6 +562,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
 
+  
+//   siStripClusterInfo_.initEvent(iSetup);
+  
+//   edm::ESHandle<Alignments> globalPositionRcd;
+//   iSetup.get<GlobalPositionRcd>().get(globalPositionRcd);
+//   
+//   printf("globalPositionRcd translation = %e, %e, %e\n", globalPositionRcd->m_align.front().translation().x(),
+//                                                         globalPositionRcd->m_align.front().translation().y(),
+//                                                         globalPositionRcd->m_align.front().translation().z());
+//   std::cout << "globalPositionRcd rotation" << globalPositionRcd->m_align.front().rotation() << std::endl;
+  
   // set up cylindrical surface for beam pipe
 //   const double ABe = 9.0121831;
 //   const double ZBe = 4.;
@@ -579,9 +648,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //   }
   
   
+  simtestz = -99.;
+  simtestvz = -99.;
+  simtestrho = -99.;
   simtestzlocalref = -99.;
   simtestdx = -99.;
   simtestdxrec = -99.;
+  simtestdy = -99.;
+  simtestdyrec = -99.;
   
   if (false) {
     
@@ -597,6 +671,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     if (genmuon) {
       genPt = genmuon->pt();
       genCharge = genmuon->charge();
+      
+      simtestvz = genmuon->vertex().z();
       
       auto const& refpoint = genmuon->vertex();
       auto const& trackmom = genmuon->momentum();
@@ -666,6 +742,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           Point3DBase<double, LocalTag> reflocal(0, 0., 0.);
 
           simtestz = detectorG->surface().position().z();
+          simtestrho = detectorG->surface().position().perp();
           
 
           auto const simhitglobal = detectorG->surface().toGlobal(Point3DBase<double, LocalTag>(simHit.localPosition().x(),
@@ -709,7 +786,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             if (idealdisk) {
               s = (zs - M[2])/T0[2];
             }
-            else if (false) {
+            else if (idealbarrel) {
               HelixBarrelPlaneCrossingByCircle crossing(GlobalPoint(M[0],M[1],M[2]), GlobalVector(P[0],P[1],P[2]), rho);
               s = crossing.pathLength(detectorG->surface()).second;
             }
@@ -743,9 +820,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             const double dx = xhat.dot(Msim-M);
             const double dxrec = xhat.dot(Mprop - Msim);
             
+            const Vector3d yhat = Vector3d(0.,0.,1.);
+            
+            const double dy = yhat.dot(Msim-M);
+            const double dyrec = yhat.dot(Mprop - Msim);
+            
             simtestdx = dx;
   //           simtestdxrec = dxrec;
             simtestdxrec = proplocal.x() - simHit.localPosition().x();
+            
+            simtestdy = dy;
+            simtestdyrec = proplocal.y() - simHit.localPosition().y();
             
             
             if (idealdisk) {
@@ -830,6 +915,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     if (track.isLooper()) {
       continue;
     }
+    
+    
     trackPt = track.pt();
     trackEta = track.eta();
     trackPhi = track.phi();
@@ -856,6 +943,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     genEta = -99.;
     genPhi = -99.;
     genCharge = -99;
+    genX = -99.;
+    genY = -99.;
+    genZ = -99.;
     genParms.fill(0.);
     for (std::vector<reco::GenParticle>::const_iterator g = genParticles.begin(); g != genParticles.end(); ++g)
     {
@@ -876,6 +966,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         genEta = g->eta();
         genPhi = g->phi();
         genCharge = g->charge();
+        
+        genX = g->vertex().x();
+        genY = g->vertex().y();
+        genZ = g->vertex().z();
         
         auto const& vtx = g->vertex();
         auto const& myBeamSpot = bs.position(vtx.z());
@@ -910,6 +1004,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     hits.reserve(track.recHitsSize()+1);
 //     hits.push_back(RecHitPointer(InvalidTrackingRecHit());
     
+//     printf("building hits\n");
+    
     for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
       const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
       const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
@@ -924,9 +1020,56 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
       }
       else {
-        hits.push_back((*it)->cloneForFit(*detectorG));
+        // apply hit quality criteria
+        const bool ispixel = GeomDetEnumerators::isTrackerPixel(detectorG->subDetector());
+//         bool hitquality = true;
+        bool hitquality = false;
+        if (applyHitQuality_ && (*it)->isValid()) {
+          const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(*it);
+          assert(tkhit != nullptr);
+          
+          if (ispixel) {
+            const SiPixelRecHit *pixhit = dynamic_cast<const SiPixelRecHit*>(tkhit);
+            const SiPixelCluster& cluster = *tkhit->cluster_pixel();
+            assert(pixhit != nullptr);
+            
+            hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
+//             hitquality = !pixhit->isOnEdge();
+//             hitquality = cluster.sizeX() > 1;
+            
+//             hitquality = pixhit->hasFilledProb() && pixhit->clusterProbability(0) > 0.000125 && pixhit->qBin()>0 && pixhit->qBin()<4;
+            
+//             if (pixhit->hasFilledProb() && pixhit->clusterProbability(0) > 0.000125 && pixhit->qBin()>0 && pixhit->qBin()<4) {
+//             if (pixhit->hasFilledProb() && pixhit->clusterProbability(0) > 0.000125 && pixhit->qBin()>0 && pixhit->qBin()<3) {
+//               hitquality = true;
+//             }
+          }
+          else {
+//             assert(tkhit->cluster_strip().isNonnull());
+//             const SiStripCluster& cluster = *tkhit->cluster_strip();
+//             SiStripClusterInfo clusterInfo = SiStripClusterInfo(cluster, iSetup, (*it)->geographicalId().rawId());
+//             if (clusterInfo.signalOverNoise() > 12.) {
+//               hitquality = true;
+//             }
+            hitquality = true;
+          }
+          
+        }
+        else {
+          hitquality = true;
+        }
+
+        
+        if (hitquality) {
+          hits.push_back((*it)->cloneForFit(*detectorG));
+        }
+        else {
+          hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
+        }
       }
     }
+    
+//     printf("done building hits\n");
     
 //     const unsigned int nhits = track.recHitsSize();
     const unsigned int nhits = hits.size();
@@ -975,6 +1118,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     nValidHits = nvalid;
     nValidPixelHits = nvalidpixel;
+    
+    nValidHitsFinal = 0;
+    nValidPixelHitsFinal = 0;
     
 //     const unsigned int nstriphits = nhits-npixhits;
 //     const unsigned int nparsAlignment = nstriphits + 2*npixhits;
@@ -1171,11 +1317,20 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //       }
 // 
 //     }
+
+//     if (genpart==nullptr) {
+//       continue;
+//     }
+//     
+//     if (genpart->eta()<-2.4 || genpart->eta()>-2.3) {
+//       continue;
+//     }
     
     
     FreeTrajectoryState refFts;
     
     if (dogen) {
+//     if (true) {
       //init from gen state
       auto const& refpoint = genpart->vertex();
       auto const& trackmom = genpart->momentum();
@@ -1286,6 +1441,36 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       dyreccluster.clear();
       dyreccluster.reserve(nvalid);
+      
+      dxerr.clear();
+      dxerr.reserve(nvalid);
+      
+      dyerr.clear();
+      dyerr.reserve(nvalid);
+      
+      clusterSize.clear();
+      clusterSize.reserve(nvalid);
+      
+      clusterSizeX.clear();
+      clusterSizeX.reserve(nvalid);
+      
+      clusterSizeY.clear();
+      clusterSizeY.reserve(nvalid);
+      
+      clusterCharge.clear();
+      clusterCharge.reserve(nvalid);
+      
+      clusterChargeBin.clear();
+      clusterChargeBin.reserve(nvalid);
+      
+      clusterOnEdge.clear();
+      clusterOnEdge.reserve(nvalid);
+      
+      clusterProbXY.clear();
+      clusterProbXY.reserve(nvalid);
+      
+      clusterSN.clear();
+      clusterSN.reserve(nvalid);
       
       localqop.clear();
       localdxdz.clear();
@@ -1409,6 +1594,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         TrajectoryStateOnSurface updtsos = propresult.first;
         
         //apply measurement update if applicable
+//         std::cout << "constructing preciseHit" << std::endl;
         auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
         if (hit->isValid() && !preciseHit->isValid()) {
           std::cout << "Abort: Failed updating hit" << std::endl;
@@ -1996,7 +2182,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         }
         
         if (preciseHit->isValid()) {
-          
+
           auto fillAlignGrads = [&](auto Nalign) {
             constexpr unsigned int nlocalstate = 2;
             constexpr unsigned int localstateidx = 0;
@@ -2032,6 +2218,22 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               dy0[0] = AlignScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
               dy0[1] = AlignScalar(0.);
               
+//               bool simvalid = false;
+//               for (auto const& simhith : simHits) {
+//                 for (const PSimHit& simHit : *simhith) {
+//                   if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
+//                     
+//                     dy0[0] = AlignScalar(simHit.localPosition().x() - updtsos.localPosition().x());
+//                     
+//                     simvalid = true;
+//                     break;
+//                   }
+//                 }
+//                 if (simvalid) {
+//                   break;
+//                 }
+//               }
+              
               Vinv = Matrix<AlignScalar, 2, 2>::Zero();
               Vinv(0,0) = 1./preciseHit->localPositionError().xx();
               
@@ -2047,8 +2249,49 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 //take 2d hit as-is for pixels
                 dy0[0] = AlignScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
                 dy0[1] = AlignScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
-                
+              
                 Vinv = iV.inverse().cast<AlignScalar>();
+                //FIXME various temporary hacks;
+                
+//                 dy0[1] = AlignScalar(0.);
+//                 Vinv = Matrix<AlignScalar, 2, 2>::Zero();
+//                 Vinv(0,0) = 1./preciseHit->localPositionError().xx();
+                
+//                 if (GeomDetEnumerators::isEndcap(preciseHit->det()->subDetector())) {
+//                 if (GeomDetEnumerators::isBarrel(preciseHit->det()->subDetector())) {
+//                   PXBDetId detidtest(preciseHit->det()->geographicalId());
+//                   int layertest = detidtest.layer();
+//                   
+//                   if (layertest > 1) {
+//                     Vinv = Matrix<AlignScalar, 2, 2>::Zero();
+//                   }
+//                   
+// //                   Vinv = Matrix<AlignScalar, 2, 2>::Zero();
+// //                   dy0[0] = AlignScalar(0.);
+// //                   dy0[1] = AlignScalar(0.);
+//                 }
+                
+//                 bool simvalid = false;
+//                 for (auto const& simhith : simHits) {
+//                   for (const PSimHit& simHit : *simhith) {
+//                     if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
+//                       
+//                       if (GeomDetEnumerators::isBarrel(preciseHit->det()->subDetector())) {
+//                         dy0[0] = AlignScalar(simHit.localPosition().x() - updtsos.localPosition().x());
+//                         dy0[1] = AlignScalar(simHit.localPosition().y() - updtsos.localPosition().y());
+//                       }
+//                       
+// //                       dy0[1] = AlignScalar(0.);
+//                       
+//                       simvalid = true;
+//                       break;
+//                     }
+//                   }
+//                   if (simvalid) {
+//                     break;
+//                   }
+//                 }
+                
                 
 //                 R = Matrix<AlignScalar, 2, 2>::Identity();
                 R = Matrix2d::Identity();
@@ -2069,6 +2312,23 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 Matrix<double, 2, 1> dy0local;
                 dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
                 dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
+                
+//                 bool simvalid = false;
+//                 for (auto const& simhith : simHits) {
+//                   for (const PSimHit& simHit : *simhith) {
+//                     if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
+//                       
+//                       dy0local[0] = simHit.localPosition().x() - updtsos.localPosition().x();
+//                       dy0local[1] = simHit.localPosition().y() - updtsos.localPosition().y();
+//                       
+//                       simvalid = true;
+//                       break;
+//                     }
+//                   }
+//                   if (simvalid) {
+//                     break;
+//                   }
+//                 }
                 
                 const Matrix<double, 2, 1> dy0eig = R*dy0local;
                 
@@ -2153,6 +2413,22 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //             }
 // 
 //             Matrix<AlignScalar, 2, 1> dh = dy0 - R*Hu*dx - R*A*dalpha;
+            
+                      
+            double thetaincidence = std::asin(1./std::sqrt(std::pow(updtsos.localParameters().dxdz(),2) + std::pow(updtsos.localParameters().dydz(),2) + 1.));
+            
+//             bool morehitquality = applyHitQuality_ ? thetaincidence > 0.25 : true;
+            bool morehitquality = true;
+            
+            if (morehitquality) {
+              nValidHitsFinal++;
+              if (ispixel) {
+                nValidPixelHitsFinal++;
+              }
+            }
+            else {
+              Vinv = Matrix<AlignScalar, 2, 2>::Zero();
+            }
 
             Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
             AlignScalar chisq = dh.transpose()*Vinv*dh;
@@ -2202,6 +2478,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             const Vector2d dyrecgeneig = R*dyrecgenlocal;
             dxrecgen.push_back(dyrecgeneig[0]);
             dyrecgen.push_back(dyrecgeneig[1]);
+            
+            dxerr.push_back(1./std::sqrt(Vinv(0,0).value().value()));
+            dyerr.push_back(1./std::sqrt(Vinv(1,1).value().value()));
 
             localqop.push_back(updtsos.localParameters().qbp());
             localdxdz.push_back(updtsos.localParameters().dxdz());
@@ -2209,8 +2488,43 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             localx.push_back(updtsos.localPosition().x());
             localy.push_back(updtsos.localPosition().y());
             
+            
             const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(preciseHit.get());
             assert(tkhit != nullptr);
+            
+            if (ispixel) {
+              const SiPixelCluster& cluster = *tkhit->cluster_pixel();
+              const SiPixelRecHit *pixhit = dynamic_cast<const SiPixelRecHit*>(tkhit);
+              assert(pixhit != nullptr);
+//               std::cout << "pixel cluster sizeX = " << cluster.sizeX() <<" sizeY = " << cluster.sizeY() << std::endl;
+              clusterSize.push_back(cluster.size());
+              clusterSizeX.push_back(cluster.sizeX());
+              clusterSizeY.push_back(cluster.sizeY());
+              clusterCharge.push_back(cluster.charge());
+              clusterChargeBin.push_back(pixhit->qBin());
+              clusterOnEdge.push_back(pixhit->isOnEdge());
+              if (pixhit->hasFilledProb()) {
+                clusterProbXY.push_back(pixhit->clusterProbability(0));
+              }
+              else {
+                clusterProbXY.push_back(2.);
+              }
+              
+              clusterSN.push_back(-99.);
+            }
+            else {
+              const SiStripCluster& cluster = *tkhit->cluster_strip();
+//               siStripClusterInfo_.setCluster(cluster, preciseHit->geographicalId().rawId());
+              SiStripClusterInfo clusterInfo = SiStripClusterInfo(cluster, iSetup, preciseHit->geographicalId().rawId());
+              clusterSize.push_back(cluster.amplitudes().size());
+              clusterSizeX.push_back(cluster.amplitudes().size());
+              clusterSizeY.push_back(1);
+              clusterCharge.push_back(cluster.charge());
+              clusterChargeBin.push_back(-99);
+              clusterOnEdge.push_back(-99);
+              clusterProbXY.push_back(-99.);
+              clusterSN.push_back(clusterInfo.signalOverNoise());
+            }
             
 //             if (ispixel) {
 //               const SiPixelCluster& cluster = *tkhit->cluster_pixel();
@@ -2431,6 +2745,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       continue;
     }
     
+    if (!nValidPixelHitsFinal) {
+      continue;
+    }
+    
     auto const& dchisqdx = gradfull.head(nstateparms);
     auto const& dchisqdparms = gradfull.tail(npars);
     
@@ -2639,6 +2957,10 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("genPhi", &genPhi, basketSize);
     tree->Branch("genCharge", &genCharge, basketSize);
     
+    tree->Branch("genX", &genX, basketSize);
+    tree->Branch("genY", &genY, basketSize);
+    tree->Branch("genZ", &genZ, basketSize);
+    
     tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
     
     tree->Branch("nHits", &nHits, basketSize);
@@ -2646,6 +2968,9 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
     tree->Branch("nParms", &nParms, basketSize);
     tree->Branch("nJacRef", &nJacRef, basketSize);
+    
+    tree->Branch("nValidHitsFinal", &nValidHitsFinal);
+    tree->Branch("nValidPixelHitsFinal", &nValidPixelHitsFinal);
     
     tree->Branch("globalidxv", globalidxv.data(), "globalidxv[nParms]/i", basketSize);
     tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
@@ -2689,6 +3014,18 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("dysimgen", &dysimgen);
     tree->Branch("dxrecsim", &dxrecsim);
     tree->Branch("dyrecsim", &dyrecsim);
+    tree->Branch("dxerr", &dxerr);
+    tree->Branch("dyerr", &dyerr);
+    
+    tree->Branch("clusterSize", &clusterSize);
+    tree->Branch("clusterSizeX", &clusterSizeX);
+    tree->Branch("clusterSizeY", &clusterSizeY);
+    tree->Branch("clusterCharge", &clusterCharge);
+    tree->Branch("clusterChargeBin", &clusterChargeBin);
+    tree->Branch("clusterOnEdge", &clusterOnEdge);
+    
+    tree->Branch("clusterProbXY", &clusterProbXY);
+    tree->Branch("clusterSN", &clusterSN);
     
     tree->Branch("dxreccluster", &dxreccluster);
     tree->Branch("dyreccluster", &dyreccluster);
@@ -2700,9 +3037,13 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("localy", &localy);
     
     tree->Branch("simtestz", &simtestz);
+    tree->Branch("simtestvz", &simtestvz);
+    tree->Branch("simtestrho", &simtestrho);
     tree->Branch("simtestzlocalref", &simtestzlocalref);
     tree->Branch("simtestdx", &simtestdx);
     tree->Branch("simtestdxrec", &simtestdxrec);
+    tree->Branch("simtestdy", &simtestdy);
+    tree->Branch("simtestdyrec", &simtestdyrec);
     
     tree->Branch("rx", &rx);
     tree->Branch("ry", &ry);
@@ -2758,11 +3099,11 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
     return;
   }
   
-//   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
-//   es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
+  edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
+  es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
   
-  edm::ESHandle<TrackerGeometry> globalGeometry;
-  es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
+//   edm::ESHandle<TrackerGeometry> globalGeometry;
+//   es.get<TrackerDigiGeometryRecord>().get("idealForDigi", globalGeometry);
   
   edm::ESHandle<TrackerTopology> trackerTopology;
   es.get<TrackerTopologyRcd>().get(trackerTopology);

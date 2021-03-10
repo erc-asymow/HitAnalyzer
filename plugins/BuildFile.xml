@@ -31,6 +31,7 @@
 <use name="Utilities/General"/>
 <use name="TrackPropagation/RungeKutta"/>
 <use name="CommonTools/UtilAlgos"/>
+<use name="RecoLocalTracker/SiStripClusterizer"/>
 
 <export>
   <lib name="1"/>
