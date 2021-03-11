@@ -1078,7 +1078,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
     unsigned int nvalid = 0;
     unsigned int nvalidpixel = 0;
-//     unsigned int nvalidalign2d = 0;
+    unsigned int nvalidalign2d = 0;
     
     // count valid hits since this is needed to size the arrays
     for (auto const& hit : hits) {
@@ -1091,10 +1091,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
 //         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
 //         const bool align2d = detidparms.count(std::make_pair(2, hit->geographicalId()));
+        
+        const bool align2d = detidparms.count(std::make_pair(1, hit->geographicalId()));
 //         
-//         if (align2d) {
-//           nvalidalign2d += 1;
-//         }
+        if (align2d) {
+          nvalidalign2d += 1;
+        }
         if (GeomDetEnumerators::isTrackerPixel(hit->det()->subDetector())) {
           nvalidpixel += 1;
         }
@@ -1126,8 +1128,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     const unsigned int nparsAlignment = nstriphits + 2*npixhits;
 //     const unsigned int nvalidstrip = nvalid - nvalidpixel;
 //     const unsigned int nparsAlignment = nvalidstrip + 2*nvalidpixel;
-//     const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
-    const unsigned int nparsAlignment = 6*nvalid;
+    const unsigned int nparsAlignment = 2*nvalid + nvalidalign2d;
+//     const unsigned int nparsAlignment = 6*nvalid;
     const unsigned int nparsBfield = nhits;
     const unsigned int nparsEloss = nhits - 1;
     const unsigned int npars = nparsAlignment + nparsBfield + nparsEloss;
@@ -1608,7 +1610,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
 //         const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : preciseHit->det();
         
-        const bool align2d = detidparms.count(std::make_pair(2, preciseHit->geographicalId()));
+        const bool align2d = detidparms.count(std::make_pair(1, preciseHit->geographicalId()));
 
         
         // compute convolution correction in local coordinates (BEFORE material effects are applied)
@@ -2362,8 +2364,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             }
 
             Matrix<AlignScalar, 6, 1> dalpha = Matrix<AlignScalar, 6, 1>::Zero();
+            // order in which to use parameters, especially relevant in case nlocalalignment < 6
+            constexpr std::array<unsigned int, 6> alphaidxs = {{5, 0, 1, 2, 3, 4}};
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
-              init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
+//               init_twice_active_var(dalpha[idim], nlocal, localalignmentidx+idim);
+              init_twice_active_var(dalpha[alphaidxs[idim]], nlocal, localalignmentidx+idim);
             }
             
             // alignment jacobian
@@ -2464,10 +2469,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner(nlocalparms, nlocalparms);
             
             for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
-              const unsigned int xglobalidx = detidparms.at(std::make_pair(idim, preciseHit->geographicalId()));
+              const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], preciseHit->geographicalId()));
               globalidxv[nparsBfield + nparsEloss + alignmentparmidx] = xglobalidx;
               alignmentparmidx++;
-              if (idim==0) {
+              if (alphaidxs[idim]==0) {
                 hitidxv.push_back(xglobalidx);
               }
             }
@@ -2579,13 +2584,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
           };
                     
-//           if (align2d) {
-//             fillAlignGrads(std::integral_constant<unsigned int, 3>());
-//           }
-//           else {
-//             fillAlignGrads(std::integral_constant<unsigned int, 2>());
-//           }
-          fillAlignGrads(std::integral_constant<unsigned int, 6>());
+          if (align2d) {
+            fillAlignGrads(std::integral_constant<unsigned int, 3>());
+          }
+          else {
+            fillAlignGrads(std::integral_constant<unsigned int, 2>());
+          }
+//           fillAlignGrads(std::integral_constant<unsigned int, 6>());
           
           ivalidhit++;
             
@@ -3133,20 +3138,21 @@ ResidualGlobalCorrectionMaker::beginRun(edm::Run const& run, edm::EventSetup con
       
 //       const bool align2d = ispixel || isendcap;
 //       const bool align2d = true;
+      const bool align2d = ispixel;
 
       
-      //always have parameters for local x alignment, bfield, and e-loss
+      //always have parameters for local x alignment, in-plane rotation, bfield, and e-loss
       parmset.emplace(0, det->geographicalId());
-      parmset.emplace(1, det->geographicalId());
-      parmset.emplace(2, det->geographicalId());
-      parmset.emplace(3, det->geographicalId());
-      parmset.emplace(4, det->geographicalId());
+//       parmset.emplace(1, det->geographicalId());
+//       parmset.emplace(2, det->geographicalId());
+//       parmset.emplace(3, det->geographicalId());
+//       parmset.emplace(4, det->geographicalId());
       parmset.emplace(5, det->geographicalId());
       
-//       if (align2d) {
-//         //local y alignment parameters only for pixels and disks for now
-//         parmset.emplace(2, det->geographicalId());
-//       }
+      if (align2d) {
+        //local y alignment parameters only for pixels for now
+        parmset.emplace(1, det->geographicalId());
+      }
       parmset.emplace(6, det->geographicalId());
       parmset.emplace(7, det->geographicalId());
     }
