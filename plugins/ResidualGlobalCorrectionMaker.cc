@@ -3566,9 +3566,9 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::curvtransportJacobian(const 
   const double cutCriterion = std::abs(s * qop0);
   
 //   std::cout << "cutCriterion " << cutCriterion << std::endl;
-//   if (cutCriterion > limit) {
+  if (cutCriterion > limit) {
 //   if (true) {
-  if (false) {
+//   if (false) {
     
     // large s limit, use CMSSW calculation which
     // explicitly uses final position and momentum from propagation
