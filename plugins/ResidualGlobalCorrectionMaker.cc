@@ -374,6 +374,9 @@ private:
   std::vector<float> rx;
   std::vector<float> ry;
   
+  std::vector<float> dlocalx;
+  std::vector<float> dlocaly;
+  
 //   bool filledRunTree_;
   
 };
@@ -1487,7 +1490,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       localy.reserve(nvalid);      
       
         
-      const bool islikelihood = iiter > 0;
+      const bool islikelihood = false;
+//       const bool islikelihood = iiter > 0;
 //       const bool islikelihood = true;
       
       gradfull = VectorXd::Zero(nparmsfull);
@@ -2810,6 +2814,20 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     Map<Matrix<float, Dynamic, 2, RowMajor> > ryout(ry.data(), nvalid, 2);
     ryout = ryfull;
     
+    dlocalx.resize(nvalid);
+    dlocaly.resize(nvalid);
+    
+    unsigned int ivalid = 0;
+    for (unsigned int ihit = 0; ihit < nhits; ++ihit) {
+      auto const& hit = hits[ihit];
+      if (hit->isValid()) {
+        const unsigned int dxidx = 3*(ihit + 1);
+        dlocalx[ivalid] = dxfull[dxidx];
+        dlocaly[ivalid] = dxfull[dxidx + 1];
+        ++ivalid;
+      }
+    }
+    
     
     float refPt = dogen ? genpart->pt() : std::abs(1./refParms[0])*std::sin(M_PI_2 - refParms[1]);
 
@@ -3052,6 +3070,9 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     
     tree->Branch("rx", &rx);
     tree->Branch("ry", &ry);
+    
+    tree->Branch("dlocalx", &dlocalx);
+    tree->Branch("dlocaly", &dlocaly);
     
     nParms = 0.;
     nJacRef = 0.;
@@ -3547,6 +3568,7 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::curvtransportJacobian(const 
 //   std::cout << "cutCriterion " << cutCriterion << std::endl;
 //   if (cutCriterion > limit) {
   if (true) {
+//   if (false) {
     
     // large s limit, use CMSSW calculation which
     // explicitly uses final position and momentum from propagation
