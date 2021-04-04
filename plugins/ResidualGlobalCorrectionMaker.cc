@@ -340,6 +340,7 @@ private:
   
   bool debugprintout_;
   
+  bool doGen_;
   bool doSim_;
   
   bool applyHitQuality_;
@@ -397,11 +398,9 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 {
   //now do what ever initialization is needed
 //   inputTraj_ = consumes<std::vector<Trajectory>>(edm::InputTag("TrackRefitter"));
-  GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
 //   inputTrack_ = consumes<TrajTrackAssociationCollection>(edm::InputTag("TrackRefitter"));
 //   inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("TrackRefitter"));
 //   inputIndices_ = consumes<std::vector<int> >(edm::InputTag("TrackRefitter"));
-  inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
   
   
   inputTrackOrig_ = consumes<reco::TrackCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("src")));
@@ -410,8 +409,14 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   fitFromGenParms_ = iConfig.getParameter<bool>("fitFromGenParms");
   fillTrackTree_ = iConfig.getParameter<bool>("fillTrackTree");
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
+  doGen_ = iConfig.getParameter<bool>("doGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
+  
+  if (doGen_) {
+    GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
+    inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
+  }
   
   if (doSim_) {
 //     inputSimHits_ = consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits","TrackerHitsTECLowTof"));
@@ -490,10 +495,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     return;
 //   }
   
-  Handle<std::vector<reco::GenParticle>> genPartCollection;
-  iEvent.getByToken(GenParticlesToken_, genPartCollection);
 
-  auto genParticles = *genPartCollection.product();
 
   // loop over gen particles
 
@@ -535,11 +537,16 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //   Handle<std::vector<Trajectory> > trajH;
 //   iEvent.getByToken(inputTraj_, trajH);
   
-  Handle<reco::BeamSpot> bsH;
-  iEvent.getByToken(inputBs_, bsH);
   
-  const reco::BeamSpot& bs = *bsH;
 
+  
+  Handle<reco::BeamSpot> bsH;
+  Handle<std::vector<reco::GenParticle>> genPartCollection;
+  if (doGen_) {
+    iEvent.getByToken(GenParticlesToken_, genPartCollection);
+    iEvent.getByToken(inputBs_, bsH);
+  }
+  
 //   Handle<std::vector<PSimHit>> tecSimHits;
   std::vector<Handle<std::vector<PSimHit>>> simHits(inputSimHits_.size());
   if (doSim_) {
@@ -950,47 +957,50 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     genY = -99.;
     genZ = -99.;
     genParms.fill(0.);
-    for (std::vector<reco::GenParticle>::const_iterator g = genParticles.begin(); g != genParticles.end(); ++g)
-    {
-      if (g->status() != 1) {
-        continue;
-      }
-      if (std::abs(g->pdgId()) != 13) {
-        continue;
-      }
-      
-      float dR = deltaR(g->phi(), trackPhi, g->eta(), trackEta);
-      
-      if (dR < 0.15)
+    
+    if (doGen_) {
+      for (std::vector<reco::GenParticle>::const_iterator g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
       {
-        genpart = &(*g);
+        if (g->status() != 1) {
+          continue;
+        }
+        if (std::abs(g->pdgId()) != 13) {
+          continue;
+        }
         
-        genPt = g->pt();
-        genEta = g->eta();
-        genPhi = g->phi();
-        genCharge = g->charge();
+        float dR = deltaR(g->phi(), trackPhi, g->eta(), trackEta);
         
-        genX = g->vertex().x();
-        genY = g->vertex().y();
-        genZ = g->vertex().z();
-        
-        auto const& vtx = g->vertex();
-        auto const& myBeamSpot = bs.position(vtx.z());
-        
-        //q/|p|
-        genParms[0] = g->charge()/g->p();
-        //lambda
-        genParms[1] = M_PI_2 - g->momentum().theta();
-        //phi
-        genParms[2] = g->phi();
-        //dxy
-        genParms[3] = (-(vtx.x() - myBeamSpot.x()) * g->py() + (vtx.y() - myBeamSpot.y()) * g->px()) / g->pt();
-        //dsz
-        genParms[4] = (vtx.z() - myBeamSpot.z()) * g->pt() / g->p() -
-           ((vtx.x() - myBeamSpot.x()) * g->px() + (vtx.y() - myBeamSpot.y()) * g->py()) / g->pt() * g->pz() / g->p();
-      }
-      else {
-        continue;
+        if (dR < 0.15)
+        {
+          genpart = &(*g);
+          
+          genPt = g->pt();
+          genEta = g->eta();
+          genPhi = g->phi();
+          genCharge = g->charge();
+          
+          genX = g->vertex().x();
+          genY = g->vertex().y();
+          genZ = g->vertex().z();
+          
+          auto const& vtx = g->vertex();
+          auto const& myBeamSpot = bsH->position(vtx.z());
+          
+          //q/|p|
+          genParms[0] = g->charge()/g->p();
+          //lambda
+          genParms[1] = M_PI_2 - g->momentum().theta();
+          //phi
+          genParms[2] = g->phi();
+          //dxy
+          genParms[3] = (-(vtx.x() - myBeamSpot.x()) * g->py() + (vtx.y() - myBeamSpot.y()) * g->px()) / g->pt();
+          //dsz
+          genParms[4] = (vtx.z() - myBeamSpot.z()) * g->pt() / g->p() -
+            ((vtx.x() - myBeamSpot.x()) * g->px() + (vtx.y() - myBeamSpot.y()) * g->py()) / g->pt() * g->pz() / g->p();
+        }
+        else {
+          continue;
+        }
       }
     }
     
@@ -3566,8 +3576,8 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMaker::curvtransportJacobian(const 
   const double cutCriterion = std::abs(s * qop0);
   
 //   std::cout << "cutCriterion " << cutCriterion << std::endl;
-  if (cutCriterion > limit) {
-//   if (true) {
+//   if (cutCriterion > limit) {
+  if (true) {
 //   if (false) {
     
     // large s limit, use CMSSW calculation which
