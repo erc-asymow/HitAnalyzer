@@ -343,6 +343,8 @@ private:
   bool doGen_;
   bool doSim_;
   
+  bool bsConstraint_;
+  
   bool applyHitQuality_;
   
   float dxpxb1;
@@ -411,11 +413,14 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
   fillGrads_ = iConfig.getParameter<bool>("fillGrads");
   doGen_ = iConfig.getParameter<bool>("doGen");
   doSim_ = iConfig.getParameter<bool>("doSim");
+  bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
+
+  inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
+
   
   if (doGen_) {
     GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
-    inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
   }
   
   if (doSim_) {
@@ -541,10 +546,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
   
   Handle<reco::BeamSpot> bsH;
+  iEvent.getByToken(inputBs_, bsH);
+
+  
   Handle<std::vector<reco::GenParticle>> genPartCollection;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
-    iEvent.getByToken(inputBs_, bsH);
   }
   
 //   Handle<std::vector<PSimHit>> tecSimHits;
@@ -1222,6 +1229,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     using MSJacobian = Matrix<MSScalar, 5, 5>;
     using MSCovariance = Matrix<MSScalar, 5, 5>;
 
+    using BSScalar = AANT<double, 2>;
+    
 //     using HitProjection = Matrix<AAdouble, 2, 5>;
 //     using HitCovariance = Matrix<AAdouble, 2, 2>;
 //     using HitVector = Matrix<AAdouble, 2, 1>;
@@ -1600,6 +1609,96 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       statejac(jacstateidxout + 3, jacstateidxin) = 1.;
       // dsz
       statejac(jacstateidxout + 4, jacstateidxin + 1) = 1.;
+      
+      if (bsConstraint_) {
+        // apply beamspot constraint
+        // TODO add residual corrections for beamspot parameters?
+        
+        constexpr unsigned int nlocalstate = 2;
+        constexpr unsigned int nlocalbs = 0;
+        constexpr unsigned int nlocalparms = nlocalbs;
+        
+        constexpr unsigned int nlocal = nlocalstate + nlocalparms;
+        
+        constexpr unsigned int localstateidx = 0;
+        constexpr unsigned int localparmidx = localstateidx + nlocalstate;
+        
+        constexpr unsigned int fullstateidx = 0;
+        const unsigned int fullparmidx = nstateparms + parmidx;
+        
+        JacobianCurvilinearToCartesian curv2cart(refFts.parameters());
+        const AlgebraicMatrix65& jac = curv2cart.jacobian();
+        
+        const double sigb1 = bsH->BeamWidthX();
+        const double sigb2 = bsH->BeamWidthY();
+        const double sigb3 = bsH->sigmaZ();
+        const double dxdz = bsH->dxdz();
+        const double dydz = bsH->dydz();
+        const double x0 = bsH->x0();
+        const double y0 = bsH->y0();
+        const double z0 = bsH->z0();
+        
+        
+        // covariance matrix of luminous region in global coordinates
+        // taken from https://github.com/cms-sw/cmssw/blob/abc1f17b230effd629c9565fb5d95e527abcb294/RecoVertex/BeamSpotProducer/src/FcnBeamSpotFitPV.cc#L63-L90
+
+        // FIXME xy correlation is not stored and assumed to be zero
+        const double corrb12 = 0.;
+        
+        const double varb1 = sigb1*sigb1;
+        const double varb2 = sigb2*sigb2;
+        const double varb3 = sigb3*sigb3;
+        
+        Matrix<double, 3, 3> covBS = Matrix<double, 3, 3>::Zero();
+        // parametrisation: rotation (dx/dz, dy/dz); covxy
+        covBS(0,0) = varb1;
+        covBS(1,0) = covBS(0,1) = corrb12*sigb1*sigb2;
+        covBS(1,1) = varb2;
+        covBS(2,0) = covBS(0,2) = dxdz*(varb3-varb1)-dydz*covBS(1,0);
+        covBS(2,1) = covBS(1,2) = dydz*(varb3-varb2)-dxdz*covBS(1,0);
+        covBS(2,2) = varb3;
+
+//         std::cout << "covBS:" << std::endl;
+//         std::cout << covBS << std::endl;
+        
+        Matrix<BSScalar, 2, 1> du = Matrix<BSScalar, 2, 1>::Zero();
+        for (unsigned int j=0; j<du.size(); ++j) {
+          init_twice_active_var(du[j], nlocal, localstateidx + j);
+        }
+        
+        Matrix<BSScalar, 3, 1> dbs0;
+        dbs0[0] = BSScalar(refFts.position().x() - x0);
+        dbs0[1] = BSScalar(refFts.position().y() - y0);
+        dbs0[2] = BSScalar(refFts.position().z() - z0);
+        
+//         std::cout << "dposition / d(qop, lambda, phi) (should be 0?):" << std::endl;
+//         std::cout << Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).topLeftCorner<3,3>() << std::endl;
+        
+        const Matrix<BSScalar, 3, 2> jacpos = Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array()).topRightCorner<3,2>().cast<BSScalar>();
+        const Matrix<BSScalar, 3, 3> covBSinv = covBS.inverse().cast<BSScalar>();
+        
+        const Matrix<BSScalar, 3, 1> dbs = dbs0 + jacpos*du;
+        const BSScalar chisq = dbs.transpose()*covBSinv*dbs;
+        
+        auto const& gradlocal = chisq.value().derivatives();
+        //fill local hessian
+        Matrix<double, nlocal, nlocal> hesslocal;
+        for (unsigned int j=0; j<nlocal; ++j) {
+          hesslocal.row(j) = chisq.derivatives()[j].derivatives();
+        }
+        
+        //fill global gradient
+        gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
+        gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+
+        //fill global hessian (upper triangular blocks only)
+        hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
+        hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
+        hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
+        
+        
+      }
+      
       
       Matrix<double, 5, 6> FdFm = curv2curvTransportJacobian(refFts, propresult, true);
       
