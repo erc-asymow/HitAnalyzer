@@ -377,8 +377,8 @@ private:
   std::vector<float> rx;
   std::vector<float> ry;
   
-  std::vector<float> dlocalx;
-  std::vector<float> dlocaly;
+  std::vector<float> deigx;
+  std::vector<float> deigy;
   
 //   bool filledRunTree_;
   
@@ -1256,6 +1256,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     MatrixXd statejac;
     VectorXd dxstate;
     
+    MatrixXd validdxeigjac;
+    VectorXd validdxeig;
+    
     Matrix<float, Dynamic, 2> rxfull(nvalid, 2); 
     Matrix<float, Dynamic, 2> ryfull(nvalid, 2);
     
@@ -1516,6 +1519,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       gradfull = VectorXd::Zero(nparmsfull);
       hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
       statejac = MatrixXd::Zero(nstateparmspost, nstateparms);
+      
+      validdxeigjac = MatrixXd::Zero(2*nvalid, nstateparms);
       
       evector<std::array<Matrix<double, 8, 8>, 11> > dhessv;
       if (islikelihood) {
@@ -2321,7 +2326,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
             //TODO add hit validation stuff
             //TODO add simhit stuff
-
+            
             Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
 
             Matrix<AlignScalar, 2, 1> dy0;
@@ -2461,6 +2466,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             rxfull.row(ivalidhit) = R.row(0).cast<float>();
             ryfull.row(ivalidhit) = R.row(1).cast<float>();
+            
+            validdxeigjac.block<2,2>(2*ivalidhit, 3*(ihit+1)) = R*Hp.bottomRightCorner<2,2>();
             
             const Matrix<AlignScalar, 2, 2> Ralign = R.cast<AlignScalar>();
             
@@ -2918,24 +2925,44 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     rx.resize(2*nvalid);
     Map<Matrix<float, Dynamic, 2, RowMajor> > rxout(rx.data(), nvalid, 2);
     rxout = rxfull;
+//     std::cout << "rx:" << std::endl;
+//     for (auto elem : rx) {
+//       std::cout << elem << " ";
+//     }
+//     std::cout << std::endl;
+//     std::cout << rx << std::endl;
     
     ry.resize(2*nvalid);
     Map<Matrix<float, Dynamic, 2, RowMajor> > ryout(ry.data(), nvalid, 2);
     ryout = ryfull;
     
-    dlocalx.resize(nvalid);
-    dlocaly.resize(nvalid);
+    deigx.resize(nvalid);
+    deigy.resize(nvalid);
     
-    unsigned int ivalid = 0;
-    for (unsigned int ihit = 0; ihit < nhits; ++ihit) {
-      auto const& hit = hits[ihit];
-      if (hit->isValid()) {
-        const unsigned int dxidx = 3*(ihit + 1);
-        dlocalx[ivalid] = dxfull[dxidx];
-        dlocaly[ivalid] = dxfull[dxidx + 1];
-        ++ivalid;
-      }
+    validdxeig = validdxeigjac*dxfull;
+    
+    for (unsigned int ivalid = 0; ivalid < nvalid; ++ivalid) {
+      deigx[ivalid] = validdxeig[2*ivalid];
+      deigy[ivalid] = validdxeig[2*ivalid + 1];
     }
+    
+//     unsigned int ivalid = 0;
+//     for (unsigned int ihit = 0; ihit < nhits; ++ihit) {
+//       auto const& hit = hits[ihit];
+//       if (hit->isValid()) {
+// //         if (ihit < (nhits-1)) {
+// //           std::cout << "ihit = " << ihit << ", ivalid = " << ivalid << std::endl;
+// //           std::cout << "dxfull.segment<3>(3*(ihit+1)):" << std::endl;
+// //           std::cout << dxfull.segment<3>(3*(ihit+1)) << std::endl;
+// //           std::cout << "dxstate.segment<5>(5*(ihit+1))" << std::endl;
+// //           std::cout << dxstate.segment<5>(5*(ihit+1)) << std::endl;
+// //         }
+//         const unsigned int dxidx = 3*(ihit + 1);
+//         dlocalx[ivalid] = dxfull[dxidx];
+//         dlocaly[ivalid] = dxfull[dxidx + 1];
+//         ++ivalid;
+//       }
+//     }
     
     
     float refPt = dogen ? genpart->pt() : std::abs(1./refParms[0])*std::sin(M_PI_2 - refParms[1]);
@@ -3180,8 +3207,8 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("rx", &rx);
     tree->Branch("ry", &ry);
     
-    tree->Branch("dlocalx", &dlocalx);
-    tree->Branch("dlocaly", &dlocaly);
+    tree->Branch("deigx", &deigx);
+    tree->Branch("deigy", &deigy);
     
     nParms = 0.;
     nJacRef = 0.;
