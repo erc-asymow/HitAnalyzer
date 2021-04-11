@@ -1191,7 +1191,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       gradfull = VectorXd::Zero(nparmsfull);
       hessfull = MatrixXd::Zero(nparmsfull, nparmsfull);
-      statejac = MatrixXd::Zero(nstateparmspost, nstateparms);
+      statejac = MatrixXd::Zero(nstateparmspost, nparmsfull);
       
       validdxeigjac = MatrixXd::Zero(2*nvalid, nstateparms);
       
@@ -1283,6 +1283,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       statejac.block<2, 2>(jacstateidxout + 1, jacstateidxin) = -Sinv*J;
       // d(lambda, phi)_i/du_(i+1)
       statejac.block<2, 2>(jacstateidxout + 1, jacstateidxin + 3) = Sinv;
+      // d(lambda, phi) / dbeta
+      statejac.block<2, 1>(jacstateidxout + 1, nstateparms + parmidx) = -Sinv*Bpref;
       // dxy
       statejac(jacstateidxout + 3, jacstateidxin) = 1.;
       // dsz
@@ -1542,6 +1544,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             Matrix<double, 2, 2> Sinv = FdFp.block<2, 2>(3, 1).inverse();
             // du/dqopp
             Matrix<double, 2, 1> D = FdFp.block<2, 1>(3, 0);
+            // du/dBp
+            Matrix<double, 2, 1> Bstate = FdFp.block<2, 1>(3, 5);
             
             const unsigned int jacstateidxout = 5*(ihit+1);
             const unsigned int jacstateidxin = 3*(ihit+1);
@@ -1554,6 +1558,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             statejac.block<2, 2>(jacstateidxout + 1, jacstateidxin) = -Sinv*J;
             // dalpha_i/du_(i+1)
             statejac.block<2, 2>(jacstateidxout + 1, jacstateidxin + 3) = Sinv;
+            // d(lambda, phi) / dbeta
+            statejac.block<2, 1>(jacstateidxout + 1, nstateparms + parmidx) = -Sinv*Bstate;
             // xlocal_i
             statejac(jacstateidxout + 3, jacstateidxin) = 1.;
             // ylocal_i
@@ -2474,7 +2480,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       dxfull = -Cinvd.solve(dchisqdx);
       
-      dxstate = statejac*dxfull;
+      dxstate = statejac.leftCols(nstateparms)*dxfull;
       
 //       const Vector5d dxRef = dx.head<5>();
 // //       const Vector5d dxRef = -Cinvd.solve(dchisqdx).head<5>();
@@ -2491,7 +2497,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //       std::cout << Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).diagonal() << std::endl;
       
       const Vector5d dxRef = dxstate.head<5>();
-      const Matrix5d Cinner = (statejac*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms))*statejac.transpose()).topLeftCorner<5,5>();
+      const Matrix5d Cinner = (statejac.leftCols(nstateparms)*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms))*statejac.leftCols(nstateparms).transpose()).topLeftCorner<5,5>();
       
 //       const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
 
@@ -2590,7 +2596,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     Map<Matrix<float, 5, Dynamic, RowMajor> > jacrefout(jacrefv.data(), 5, npars);
     
 //     jacrefout = dxdparms.leftCols<5>().transpose().cast<float>();    
-    jacrefout = (dxdparms*statejac.transpose()).leftCols<5>().transpose().cast<float>();  
+    jacrefout = ( (dxdparms*statejac.leftCols(nstateparms).transpose()).leftCols<5>().transpose() + statejac.topRightCorner(5, npars) ).cast<float>();  
     
     gradout = grad.cast<float>();
     

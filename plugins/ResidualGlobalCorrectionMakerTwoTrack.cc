@@ -393,12 +393,12 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         // du/dqopp
         const Matrix<double, 2, 1> D = FdFp.block<2, 1>(3, 0);
         // du/dBp
-//         Matrix<double, 2, 1> Bpref = FdFp.block<2, 1>(3, 5);
+        Matrix<double, 2, 1> Bpref = FdFp.block<2, 1>(3, 5);
         // d(dxy, dsz) / dvtx
         const Matrix<double, 2, 3> Vref = jacCart2Curvref.bottomLeftCorner<2,3>();
         
         MatrixXd &jac = jacarr[id];
-        jac = MatrixXd::Zero(5, nstateparms);
+        jac = MatrixXd::Zero(5, nparmsfull);
         
         // dqop / dqop_0
         jac(0, trackstateidx) = 1.;
@@ -408,8 +408,11 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         jac.block<2, 3>(1, 0) = -Sinv*J*Vref;
         // d(lambda, phi)_i/ d(dxy, dsz)_1
         jac.block<2, 2>(1, trackstateidx + 1) = Sinv;
+        // d(lambda, phi) / dbeta
+        jac.block<2, 1>(1, nstateparms + parmidx) = -Sinv*Bpref;
         // d(dxy, dsz)/dvtx
         jac.block<2, 3>(3, 0) = Vref;
+        
         
         
         //TODO add state jacobian stuff here
@@ -1384,7 +1387,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         const AlgebraicMatrix65& jaccurv2cart = curv2cart.jacobian();
         const AlgebraicVector6 glob = refFts.parameters().vector();
         
-        const Matrix<double, 5, 1> dxcurv = jac*dxfull;
+        const Matrix<double, 5, 1> dxcurv = jac.leftCols(nstateparms)*dxfull;
         
         const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + Map<const Matrix<double, 6, 5, RowMajor>>(jaccurv2cart.Array())*dxcurv;
         
@@ -1419,10 +1422,10 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       Map<Matrix<float, 5, 1>>(MuMinus_refParms.data()) = mucurvarr[idxminus].cast<float>();
       
       Muplus_jacRef.resize(5*npars);
-      Map<Matrix<float, 5, Dynamic, RowMajor>>(Muplus_jacRef.data(), 5, npars) = (jacarr[idxplus]*dxdparms.transpose()).cast<float>();
+      Map<Matrix<float, 5, Dynamic, RowMajor>>(Muplus_jacRef.data(), 5, npars) = (jacarr[idxplus].leftCols(nstateparms)*dxdparms.transpose() + jacarr[idxplus].rightCols(npars)).cast<float>();
       
       Muminus_jacRef.resize(5*npars);
-      Map<Matrix<float, 5, Dynamic, RowMajor>>(Muminus_jacRef.data(), 5, npars) = (jacarr[idxminus]*dxdparms.transpose()).cast<float>();
+      Map<Matrix<float, 5, Dynamic, RowMajor>>(Muminus_jacRef.data(), 5, npars) = (jacarr[idxminus].leftCols(nstateparms)*dxdparms.transpose() + jacarr[idxminus].rightCols(npars)).cast<float>();
       
       auto const jpsimom = muarr[0] + muarr[1];
       
