@@ -25,6 +25,118 @@ ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::Paramete
 void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
 {
   ResidualGlobalCorrectionMakerBase::beginStream(streamid);
+  
+  if (fillTrackTree_) {
+    const int basketSize = 4*1024*1024;
+    
+    tree->Branch("trackPt", &trackPt, basketSize);
+    tree->Branch("trackPtErr", &trackPtErr, basketSize);
+    tree->Branch("trackEta", &trackEta, basketSize);
+    tree->Branch("trackPhi", &trackPhi, basketSize);
+    tree->Branch("trackCharge", &trackCharge, basketSize);
+    //workaround for older ROOT version inability to store std::array automatically
+  //   tree->Branch("trackOrigParms", trackOrigParms.data(), "trackOrigParms[5]/F", basketSize);
+  //   tree->Branch("trackOrigCov", trackOrigCov.data(), "trackOrigCov[25]/F", basketSize);
+    tree->Branch("trackParms", trackParms.data(), "trackParms[5]/F", basketSize);
+    tree->Branch("trackCov", trackCov.data(), "trackCov[25]/F", basketSize);
+    
+    tree->Branch("refParms_iter0", refParms_iter0.data(), "refParms_iter0[5]/F", basketSize);
+    tree->Branch("refCov_iter0", refCov_iter0.data(), "refCov_iter0[25]/F", basketSize);
+  //   tree->Branch("refParms_iter2", refParms_iter2.data(), "refParms_iter2[5]/F", basketSize);
+  //   tree->Branch("refCov_iter2", refCov_iter2.data(), "refCov_iter2[25]/F", basketSize);  
+    
+    tree->Branch("refParms", refParms.data(), "refParms[5]/F", basketSize);
+    tree->Branch("refCov", refCov.data(), "refCov[25]/F", basketSize);
+    tree->Branch("genParms", genParms.data(), "genParms[5]/F", basketSize);
+
+    tree->Branch("genPt", &genPt, basketSize);
+    tree->Branch("genEta", &genEta, basketSize);
+    tree->Branch("genPhi", &genPhi, basketSize);
+    tree->Branch("genCharge", &genCharge, basketSize);
+    
+    tree->Branch("genX", &genX, basketSize);
+    tree->Branch("genY", &genY, basketSize);
+    tree->Branch("genZ", &genZ, basketSize);
+    
+    tree->Branch("normalizedChi2", &normalizedChi2, basketSize);
+    
+    tree->Branch("nHits", &nHits, basketSize);
+    tree->Branch("nValidHits", &nValidHits, basketSize);
+    tree->Branch("nValidPixelHits", &nValidPixelHits, basketSize);
+    tree->Branch("nJacRef", &nJacRef, basketSize);
+    
+    tree->Branch("nValidHitsFinal", &nValidHitsFinal);
+    tree->Branch("nValidPixelHitsFinal", &nValidPixelHitsFinal);
+    
+    tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
+    
+
+    
+//     tree->Branch("dxpxb1", &dxpxb1);
+//     tree->Branch("dypxb1", &dypxb1);
+//     
+//     tree->Branch("dxttec9rphi", &dxttec9rphi);
+//     tree->Branch("dxttec9stereo", &dxttec9stereo);
+//     
+//     tree->Branch("dxttec4rphi", &dxttec4rphi);
+//     tree->Branch("dxttec4stereo", &dxttec4stereo);
+//     
+//     tree->Branch("dxttec4rphisimgen", &dxttec4rphisimgen);
+//     tree->Branch("dyttec4rphisimgen", &dyttec4rphisimgen);
+//     tree->Branch("dxttec4rphirecsim", &dxttec4rphirecsim);
+//     
+//     tree->Branch("dxttec9rphisimgen", &dxttec9rphisimgen);
+//     tree->Branch("dyttec9rphisimgen", &dyttec9rphisimgen);
+//     
+//     tree->Branch("simlocalxref", &simlocalxref);
+//     tree->Branch("simlocalyref", &simlocalyref);
+    
+    tree->Branch("hitidxv", &hitidxv);
+    tree->Branch("dxrecgen", &dxrecgen);
+    tree->Branch("dyrecgen", &dyrecgen);
+    tree->Branch("dxsimgen", &dxsimgen);
+    tree->Branch("dysimgen", &dysimgen);
+    tree->Branch("dxrecsim", &dxrecsim);
+    tree->Branch("dyrecsim", &dyrecsim);
+    tree->Branch("dxerr", &dxerr);
+    tree->Branch("dyerr", &dyerr);
+    
+    tree->Branch("clusterSize", &clusterSize);
+    tree->Branch("clusterSizeX", &clusterSizeX);
+    tree->Branch("clusterSizeY", &clusterSizeY);
+    tree->Branch("clusterCharge", &clusterCharge);
+    tree->Branch("clusterChargeBin", &clusterChargeBin);
+    tree->Branch("clusterOnEdge", &clusterOnEdge);
+    
+    tree->Branch("clusterProbXY", &clusterProbXY);
+    tree->Branch("clusterSN", &clusterSN);
+    
+    tree->Branch("dxreccluster", &dxreccluster);
+    tree->Branch("dyreccluster", &dyreccluster);
+    
+    tree->Branch("localqop", &localqop);
+    tree->Branch("localdxdz", &localdxdz);
+    tree->Branch("localdydz", &localdydz);
+    tree->Branch("localx", &localx);
+    tree->Branch("localy", &localy);
+    
+    tree->Branch("simtestz", &simtestz);
+    tree->Branch("simtestvz", &simtestvz);
+    tree->Branch("simtestrho", &simtestrho);
+    tree->Branch("simtestzlocalref", &simtestzlocalref);
+    tree->Branch("simtestdx", &simtestdx);
+    tree->Branch("simtestdxrec", &simtestdxrec);
+    tree->Branch("simtestdy", &simtestdy);
+    tree->Branch("simtestdyrec", &simtestdyrec);
+    
+    tree->Branch("rx", &rx);
+    tree->Branch("ry", &ry);
+    
+    tree->Branch("deigx", &deigx);
+    tree->Branch("deigy", &deigy);
+    
+    nJacRef = 0.;
+  }
 }
 
 
