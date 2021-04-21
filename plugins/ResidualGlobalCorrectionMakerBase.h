@@ -222,6 +222,9 @@ protected:
   template <typename T>
   void init_twice_active_null(T &ad, const unsigned int d_num) const;
   
+//   Matrix<double, 5, 3> vertexToCurvilinearJacobian(const FreeTrajectoryState &state) const;
+  Matrix<double, 6, 6> cartesianToCartesianJacobian(const FreeTrajectoryState &state) const;
+  
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;

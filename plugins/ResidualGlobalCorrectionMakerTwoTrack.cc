@@ -199,6 +199,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
   VectorXd grad;
   MatrixXd hess;
   LDLT<MatrixXd> Cinvd;
+//   FullPivLU<MatrixXd> Cinvd;
+//   ColPivHouseholderQR<MatrixXd> Cinvd;
   
   std::array<MatrixXd, 2> jacarr;
   
@@ -219,6 +221,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       
       RefCountedKinematicTree kinTree;
       if (doMassConstraint_) {
+//       if (false) {
         TwoTrackMassKinematicConstraint constraint(massConstraint_);
         KinematicConstrainedVertexFitter vtxFitter;
         kinTree = vtxFitter.fit(parts, &constraint);
@@ -353,6 +356,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       }
       
       std::array<Matrix<double, 5, 6>, 2> FdFmrefarr;
+      std::array<Matrix<double, 5, 6>, 2> FdFprefarr;
       std::array<unsigned int, 2> trackstateidxarr;
       std::array<unsigned int, 2> trackparmidxarr;
       
@@ -387,6 +391,11 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         
         const Matrix<double, 5, 6> FdFp = curv2curvTransportJacobian(refFts, propresult, false);
 
+        FdFprefarr[id] = FdFp;
+        
+//         const Matrix<double, 6, 6> cartjac = cartesianToCartesianJacobian(refFts);
+
+        
         const Matrix<double, 2, 2> J = FdFp.block<2, 2>(3, 3);
         // (du/dalphap)^-1
         const Matrix<double, 2, 2> Sinv = FdFp.block<2, 2>(3, 1).inverse();
@@ -412,6 +421,9 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         jac.block<2, 1>(1, nstateparms + parmidx) = -Sinv*Bpref;
         // d(dxy, dsz)/dvtx
         jac.block<2, 3>(3, 0) = Vref;
+        
+        // d(lambda,phi) / dvtx (b-field transport)
+//         jac.block<2, 3>(1, 0) += jacCart2Curvref.block<2, 3>(1, 3)*cartjac.bottomLeftCorner<3, 3>();
         
         
         
@@ -669,6 +681,18 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 hesslocal.row(j) = chisq.derivatives()[j].derivatives();
               }
               
+              constexpr std::array<unsigned int, 3> localsizes = {{ nvtxstate, nlocalstate, nlocalparms }};
+              constexpr std::array<unsigned int, 3> localidxs = {{ localvtxidx, localstateidx, localparmidx }};
+              const std::array<unsigned int, 3> fullidxs = {{ fullvtxidx, fullstateidx, fullparmidx }};
+              
+              for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
+                gradfull.segment(fullidxs[iidx], localsizes[iidx]) += gradlocal.segment(localidxs[iidx], localsizes[iidx]);
+                for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
+                  hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += hesslocal.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
+                }
+              }
+              
+              
 //               std::cout << "first hit gradlocal" << std::endl;
 //               std::cout << gradlocal << std::endl;
 //               
@@ -676,16 +700,22 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
 //               std::cout << hesslocal << std::endl;
               
               //Fill global grad and hess (upper triangular blocks only)
-              gradfull.segment<nvtxstate>(fullvtxidx) += gradlocal.segment<nvtxstate>(localvtxidx);
-              gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.segment<nlocalstate>(localstateidx);
-              gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+//               gradfull.segment<nvtxstate>(fullvtxidx) += gradlocal.segment<nvtxstate>(localvtxidx);
+//               gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.segment<nlocalstate>(localstateidx);
+//               gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+//               
+//               hessfull.block<nvtxstate, nvtxstate>(fullvtxidx, fullvtxidx) += hesslocal.block<nvtxstate, nvtxstate>(localvtxidx, localvtxidx);
+//               hessfull.block<nvtxstate, nlocalstate>(fullvtxidx, fullstateidx) += hesslocal.block<nvtxstate, nlocalstate>(localvtxidx, localstateidx);
+//               hessfull.block<nvtxstate, nlocalparms>(fullvtxidx, fullparmidx) += hesslocal.block<nvtxstate, nlocalparms>(localvtxidx, localparmidx);
+//               
+//               hessfull.block<nlocalstate, nlocalstate>(fullstateidx, fullstateidx) += hesslocal.block<nlocalstate,nlocalstate>(localstateidx, localstateidx);
+//               hessfull.block<nlocalstate, nlocalparms>(fullstateidx, fullparmidx) += hesslocal.block<nlocalstate, nlocalparms>(localstateidx, localparmidx);
+//               
+//               hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.block<nlocalparms, nlocalparms>(localparmidx, localparmidx);
+//               
+//               //extra part
+//               hessfull.block<nlocalstate, nvtxstate>(fullstateidx, fullvtxidx) += hesslocal.block<nvtxstate, nlocalstate>(localvtxidx, localstateidx).transpose();
               
-              hessfull.block<nvtxstate, nvtxstate>(fullvtxidx, fullvtxidx) += hesslocal.block<nvtxstate, nvtxstate>(localvtxidx, localvtxidx);
-              hessfull.block<nvtxstate, nlocalstate>(fullvtxidx, fullstateidx) += hesslocal.block<nvtxstate, nlocalstate>(localvtxidx, localstateidx);
-              hessfull.block<nvtxstate, nlocalparms>(fullvtxidx, fullparmidx) += hesslocal.block<nvtxstate, nlocalparms>(localvtxidx, localparmidx);
-              hessfull.block<nlocalstate, nlocalstate>(fullstateidx, fullstateidx) += hesslocal.block<nlocalstate,nlocalstate>(localstateidx, localstateidx);
-              hessfull.block<nlocalstate, nlocalparms>(fullstateidx, fullparmidx) += hesslocal.block<nlocalstate, nlocalparms>(localstateidx, localparmidx);
-              hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.block<nlocalparms, nlocalparms>(localparmidx, localparmidx);
               
 //               std::cout << "first hit, parm idx = " << parmidx << std::endl;
               
@@ -818,14 +848,25 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 hesslocal.row(j) = chisq.derivatives()[j].derivatives();
               }
               
-              //fill global gradient
-              gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
-              gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
-
-              //fill global hessian (upper triangular blocks only)
-              hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
-              hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
-              hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
+              constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
+              constexpr std::array<unsigned int, 2> localidxs = {{ localstateidx, localparmidx }};
+              const std::array<unsigned int, 2> fullidxs = {{ fullstateidx, fullparmidx }};
+              
+              for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
+                gradfull.segment(fullidxs[iidx], localsizes[iidx]) += gradlocal.segment(localidxs[iidx], localsizes[iidx]);
+                for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
+                  hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += hesslocal.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
+                }
+              }
+              
+//               //fill global gradient
+//               gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
+//               gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
+// 
+//               //fill global hessian (upper triangular blocks only)
+//               hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner<nlocalstate,nlocalstate>();
+//               hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
+//               hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
               
 //               std::cout << "intermediate hit, parm idx = " << parmidx << std::endl;
               
@@ -1108,6 +1149,17 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 hesslocal.row(j) = chisq.derivatives()[j].derivatives();
               }
               
+              constexpr std::array<unsigned int, 2> localsizes = {{ nlocalstate, nlocalparms }};
+              constexpr std::array<unsigned int, 2> localidxs = {{ localstateidx, localparmidx }};
+              const std::array<unsigned int, 2> fullidxs = {{ fullstateidx, fullparmidx }};
+              
+              for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
+                gradfull.segment(fullidxs[iidx], localsizes[iidx]) += gradlocal.segment(localidxs[iidx], localsizes[iidx]);
+                for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
+                  hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += hesslocal.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
+                }
+              }
+              
   //             Matrix<double, nlocal, 1> gradloctest0;
   //             Matrix<double, 1, 1> gradloctest1;
   //             Matrix<double, 2, 1> gradloctest2;
@@ -1123,13 +1175,13 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
               
               // FIXME the templated block functions don't work here for some reason
               //fill global gradient
-              gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head(nlocalstate);
-              gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment(localparmidx, nlocalparms);
-
-              //fill global hessian (upper triangular blocks only)
-              hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner(nlocalstate,nlocalstate);
-              hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner(nlocalstate, nlocalparms);
-              hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner(nlocalparms, nlocalparms);
+//               gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head(nlocalstate);
+//               gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment(localparmidx, nlocalparms);
+// 
+//               //fill global hessian (upper triangular blocks only)
+//               hessfull.block<nlocalstate,nlocalstate>(fullstateidx, fullstateidx) += hesslocal.topLeftCorner(nlocalstate,nlocalstate);
+//               hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner(nlocalstate, nlocalparms);
+//               hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner(nlocalparms, nlocalparms);
               
               for (unsigned int idim=0; idim<nlocalalignment; ++idim) {
                 const unsigned int xglobalidx = detidparms.at(std::make_pair(alphaidxs[idim], preciseHit->geographicalId()));
@@ -1164,9 +1216,11 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         continue;
       }
       
+//       MatrixXd massjac;
 
       // add mass constraint to gbl fit
       if (doMassConstraint_) {
+//       if (false) {
         constexpr unsigned int nvtxstate = 6;
         constexpr unsigned int nlocalstate = 3;
         constexpr unsigned int nlocalparms0 = 1;
@@ -1181,8 +1235,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         
         constexpr unsigned int fullvtxidx = 0;
         const unsigned int fullstateidx = trackstateidxarr[1];
-        const unsigned int fullparmidx0 = trackparmidxarr[0];
-        const unsigned int fullparmidx1 = trackparmidxarr[1];
+        const unsigned int fullparmidx0 = nstateparms + trackparmidxarr[0];
+        const unsigned int fullparmidx1 = nstateparms + trackparmidxarr[1];
         
         using MScalar = AANT<double, nlocal>;
         
@@ -1190,8 +1244,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         const FreeTrajectoryState refFts0 = outparts[0]->currentState().freeTrajectoryState();
         const FreeTrajectoryState refFts1 = outparts[1]->currentState().freeTrajectoryState();
         
-        const Matrix<double, 5, 6> &FdFm0 = FdFmrefarr[0];
-        const Matrix<double, 5, 6> &FdFm1 = FdFmrefarr[1];
+        const Matrix<double, 5, 6> &FdFp0 = FdFprefarr[0];
+        const Matrix<double, 5, 6> &FdFp1 = FdFprefarr[1];
         
         JacobianCartesianToCurvilinear cart2curvref0(refFts0.parameters());
         auto const &jacCart2Curvref0 = Map<const Matrix<double, 5, 6, RowMajor>>(cart2curvref0.jacobian().Array());
@@ -1205,31 +1259,35 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         JacobianCurvilinearToCartesian curv2cartref1(refFts1.parameters());
         auto const &jacCurv2Cartref1 = Map<const Matrix<double, 6, 5, RowMajor>>(curv2cartref1.jacobian().Array());
         
+//         const Matrix<double, 6, 6> cartjac0 = cartesianToCartesianJacobian(refFts0);
+//         const Matrix<double, 6, 6> cartjac1 = cartesianToCartesianJacobian(refFts1);
+        
         const Matrix<double, 1, 6> m2jac = massJacobian(refFts0, refFts1, mmu);
         
         // du/dum
-        const Matrix<MScalar, 2, 2> Jm0 = FdFm0.block<2, 2>(3, 3).cast<MScalar>();
+        const Matrix<MScalar, 2, 2> Jm0 = FdFp0.block<2, 2>(3, 3).cast<MScalar>();
         // (du/dalpham)^-1
-        const Matrix<MScalar, 2, 2> Sinvm0 = FdFm0.block<2, 2>(3, 1).inverse().cast<MScalar>();
+        const Matrix<MScalar, 2, 2> Sinvm0 = FdFp0.block<2, 2>(3, 1).inverse().cast<MScalar>();
         // du/dqopm
-        const Matrix<MScalar, 2, 1> Dm0 = FdFm0.block<2, 1>(3, 0).cast<MScalar>();
+        const Matrix<MScalar, 2, 1> Dm0 = FdFp0.block<2, 1>(3, 0).cast<MScalar>();
         // du/dBm
-        const Matrix<MScalar, 2, 1> Bm0 = FdFm0.block<2, 1>(3, 5).cast<MScalar>();
+        const Matrix<MScalar, 2, 1> Bm0 = FdFp0.block<2, 1>(3, 5).cast<MScalar>();
         // dum/dvtx
         const Matrix<MScalar, 2, 3> Vm0 = jacCart2Curvref0.bottomLeftCorner<2,3>().cast<MScalar>();
 
         // du/dum
-        const Matrix<MScalar, 2, 2> Jm1 = FdFm1.block<2, 2>(3, 3).cast<MScalar>();
+        const Matrix<MScalar, 2, 2> Jm1 = FdFp1.block<2, 2>(3, 3).cast<MScalar>();
         // (du/dalpham)^-1
-        const Matrix<MScalar, 2, 2> Sinvm1 = FdFm1.block<2, 2>(3, 1).inverse().cast<MScalar>();
+        const Matrix<MScalar, 2, 2> Sinvm1 = FdFp1.block<2, 2>(3, 1).inverse().cast<MScalar>();
         // du/dqopm
-        const Matrix<MScalar, 2, 1> Dm1 = FdFm1.block<2, 1>(3, 0).cast<MScalar>();
+        const Matrix<MScalar, 2, 1> Dm1 = FdFp1.block<2, 1>(3, 0).cast<MScalar>();
         // du/dBm
-        const Matrix<MScalar, 2, 1> Bm1 = FdFm1.block<2, 1>(3, 5).cast<MScalar>();
+        const Matrix<MScalar, 2, 1> Bm1 = FdFp1.block<2, 1>(3, 5).cast<MScalar>();
         // dum/dvtx
         const Matrix<MScalar, 2, 3> Vm1 = jacCart2Curvref1.bottomLeftCorner<2,3>().cast<MScalar>();
         
-        
+//         massjac = (m2jac.leftCols<3>()*(jacCurv2Cartref0*jacarr[0]).bottomRows<3>() + m2jac.rightCols<3>()*(jacCurv2Cartref1*jacarr[1]).bottomRows<3>()).leftCols(nstateparms);
+                
         // initialize active scalars for common vertex parameters
         Matrix<MScalar, 3, 1> dvtx = Matrix<MScalar, 3, 1>::Zero();
         for (unsigned int j=0; j<dvtx.size(); ++j) {
@@ -1264,23 +1322,39 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         const Matrix<MScalar, 2, 1> dum0 = Vm0*dvtx;
         const Matrix<MScalar, 2, 1> dum1 = Vm1*dvtx;
         
-        const Matrix<MScalar, 2, 1> dlamphi0 = Sinvm0*(dum0 - Jm0*du0 - Dm0*dqop0 - Bm0*dbeta0);
-        const Matrix<MScalar, 2, 1> dlamphi1 = Sinvm1*(dum1 - Jm1*du1 - Dm1*dqop1 - Bm1*dbeta1);
+        const Matrix<MScalar, 2, 1> dlamphi0 = Sinvm0*(du0 - Jm0*dum0 - Dm0*dqop0 - Bm0*dbeta0);
+        const Matrix<MScalar, 2, 1> dlamphi1 = Sinvm1*(du1 - Jm1*dum1 - Dm1*dqop1 - Bm1*dbeta1);
+        
+//         std::cout << dlamphi0[0].value().value() << std::endl;
+//         std::cout << dlamphi1[0].value().value() << std::endl;
+        
+//         const Matrix<MScalar, 3, 1> dmom0 = jacCurv2Cartref0.block<3, 1>(3, 0).cast<MScalar>()*dqop0 + jacCurv2Cartref0.block<3, 2>(3, 1).cast<MScalar>()*dlamphi0 + cartjac0.bottomLeftCorner<3, 3>().cast<MScalar>()*dvtx;
+//         const Matrix<MScalar, 3, 1> dmom1 = jacCurv2Cartref1.block<3, 1>(3, 0).cast<MScalar>()*dqop1 + jacCurv2Cartref1.block<3, 2>(3, 1).cast<MScalar>()*dlamphi1 + cartjac1.bottomLeftCorner<3, 3>().cast<MScalar>()*dvtx;
+        
+//         const Matrix<MScalar, 3, 1> dmom0 = jacCurv2Cartref0.block<3, 1>(3, 0).cast<MScalar>()*dqop0;
+//         const Matrix<MScalar, 3, 1> dmom1 = jacCurv2Cartref1.block<3, 1>(3, 0).cast<MScalar>()*dqop1;
         
         const Matrix<MScalar, 3, 1> dmom0 = jacCurv2Cartref0.block<3, 1>(3, 0).cast<MScalar>()*dqop0 + jacCurv2Cartref0.block<3, 2>(3, 1).cast<MScalar>()*dlamphi0;
         const Matrix<MScalar, 3, 1> dmom1 = jacCurv2Cartref1.block<3, 1>(3, 0).cast<MScalar>()*dqop1 + jacCurv2Cartref1.block<3, 2>(3, 1).cast<MScalar>()*dlamphi1;
         
         // resonance width
-        const MScalar invSigmaMsq(0.25/massConstraint_/massConstraint_/massConstraintWidth_/massConstraintWidth_);
+//         const MScalar invSigmaMsq(0.25/massConstraint_/massConstraint_/massConstraintWidth_/massConstraintWidth_);
+//         const MScalar dmsq0 = MScalar(m0*m0 - massConstraint_*massConstraint_);
         
-        const MScalar dmsq0 = MScalar(m0*m0 - massConstraint_*massConstraint_);
+        const MScalar invSigmaMsq(1./massConstraintWidth_/massConstraintWidth_);
+        const MScalar dmsq0 = MScalar(0.);
+//         const MScalar dmsq0 = MScalar(m0 - massConstraint_);
+        
+        
+//         std::cout << "invSigmaMsq = " << invSigmaMsq.value().value() << std::endl;
         
         const MScalar dmsqtrack0 = (m2jac.leftCols<3>().cast<MScalar>()*dmom0)[0];
         const MScalar dmsqtrack1 = (m2jac.rightCols<3>().cast<MScalar>()*dmom1)[0];
         
         const MScalar dmsq = dmsq0 + dmsqtrack0 + dmsqtrack1;
         
-        const MScalar chisq = dmsq*invSigmaMsq*dmsq;
+//         const MScalar chisq = dmsq*invSigmaMsq*dmsq;
+        const MScalar chisq = invSigmaMsq*dmsq*dmsq;
         
         auto const& gradlocal = chisq.value().derivatives();
         //fill local hessian
@@ -1288,26 +1362,40 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         for (unsigned int j=0; j<nlocal; ++j) {
           hesslocal.row(j) = chisq.derivatives()[j].derivatives();
         }
+        
+        constexpr std::array<unsigned int, 4> localsizes = {{ nvtxstate, nlocalstate, nlocalparms0, nlocalparms1 }};
+        constexpr std::array<unsigned int, 4> localidxs = {{ localvtxidx, localstateidx, localparmidx0, localparmidx1 }};
+        const std::array<unsigned int, 4> fullidxs = {{ fullvtxidx, fullstateidx, fullparmidx0, fullparmidx1 }};
+        
+        for (unsigned int iidx = 0; iidx < localidxs.size(); ++iidx) {
+          gradfull.segment(fullidxs[iidx], localsizes[iidx]) += gradlocal.segment(localidxs[iidx], localsizes[iidx]);
+          for (unsigned int jidx = 0; jidx < localidxs.size(); ++jidx) {
+            hessfull.block(fullidxs[iidx], fullidxs[jidx], localsizes[iidx], localsizes[jidx]) += hesslocal.block(localidxs[iidx], localidxs[jidx], localsizes[iidx], localsizes[jidx]);
+          }
+        }
 
-        //Fill global grad and hess (upper triangular blocks only)
-        gradfull.segment<nvtxstate>(fullvtxidx) += gradlocal.segment<nvtxstate>(localvtxidx);
-        gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.segment<nlocalstate>(localstateidx);
-        gradfull.segment<nlocalparms0>(fullparmidx0) += gradlocal.segment<nlocalparms0>(localparmidx0);
-        gradfull.segment<nlocalparms1>(fullparmidx1) += gradlocal.segment<nlocalparms1>(localparmidx1);
-        
-        hessfull.block<nvtxstate, nvtxstate>(fullvtxidx, fullvtxidx) += hesslocal.block<nvtxstate, nvtxstate>(localvtxidx, localvtxidx);
-        hessfull.block<nvtxstate, nlocalstate>(fullvtxidx, fullstateidx) += hesslocal.block<nvtxstate, nlocalstate>(localvtxidx, localstateidx);
-        hessfull.block<nvtxstate, nlocalparms0>(fullvtxidx, fullparmidx0) += hesslocal.block<nvtxstate, nlocalparms0>(localvtxidx, localparmidx0);
-        hessfull.block<nvtxstate, nlocalparms1>(fullvtxidx, fullparmidx1) += hesslocal.block<nvtxstate, nlocalparms1>(localvtxidx, localparmidx1);
-        
-        hessfull.block<nlocalstate, nlocalstate>(fullstateidx, fullstateidx) += hesslocal.block<nlocalstate,nlocalstate>(localstateidx, localstateidx);
-        hessfull.block<nlocalstate, nlocalparms0>(fullstateidx, fullparmidx0) += hesslocal.block<nlocalstate, nlocalparms0>(localstateidx, localparmidx0);
-        hessfull.block<nlocalstate, nlocalparms1>(fullstateidx, fullparmidx1) += hesslocal.block<nlocalstate, nlocalparms1>(localstateidx, localparmidx1);
-        
-        hessfull.block<nlocalparms0, nlocalparms0>(fullparmidx0, fullparmidx0) += hesslocal.block<nlocalparms0, nlocalparms0>(localparmidx0, localparmidx0);
-        hessfull.block<nlocalparms0, nlocalparms1>(fullparmidx0, fullparmidx1) += hesslocal.block<nlocalparms0, nlocalparms1>(localparmidx0, localparmidx1);
-
-        hessfull.block<nlocalparms1, nlocalparms1>(fullparmidx1, fullparmidx1) += hesslocal.block<nlocalparms1, nlocalparms1>(localparmidx1, localparmidx1);
+//         //Fill global grad and hess (upper triangular blocks only)
+//         gradfull.segment<nvtxstate>(fullvtxidx) += gradlocal.segment<nvtxstate>(localvtxidx);
+//         gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.segment<nlocalstate>(localstateidx);
+//         gradfull.segment<nlocalparms0>(fullparmidx0) += gradlocal.segment<nlocalparms0>(localparmidx0);
+//         gradfull.segment<nlocalparms1>(fullparmidx1) += gradlocal.segment<nlocalparms1>(localparmidx1);
+//         
+//         hessfull.block<nvtxstate, nvtxstate>(fullvtxidx, fullvtxidx) += hesslocal.block<nvtxstate, nvtxstate>(localvtxidx, localvtxidx);
+//         hessfull.block<nvtxstate, nlocalstate>(fullvtxidx, fullstateidx) += hesslocal.block<nvtxstate, nlocalstate>(localvtxidx, localstateidx);
+//         hessfull.block<nvtxstate, nlocalparms0>(fullvtxidx, fullparmidx0) += hesslocal.block<nvtxstate, nlocalparms0>(localvtxidx, localparmidx0);
+//         hessfull.block<nvtxstate, nlocalparms1>(fullvtxidx, fullparmidx1) += hesslocal.block<nvtxstate, nlocalparms1>(localvtxidx, localparmidx1);
+//         
+//         hessfull.block<nlocalstate, nlocalstate>(fullstateidx, fullstateidx) += hesslocal.block<nlocalstate,nlocalstate>(localstateidx, localstateidx);
+//         hessfull.block<nlocalstate, nlocalparms0>(fullstateidx, fullparmidx0) += hesslocal.block<nlocalstate, nlocalparms0>(localstateidx, localparmidx0);
+//         hessfull.block<nlocalstate, nlocalparms1>(fullstateidx, fullparmidx1) += hesslocal.block<nlocalstate, nlocalparms1>(localstateidx, localparmidx1);
+//         
+//         hessfull.block<nlocalparms0, nlocalparms0>(fullparmidx0, fullparmidx0) += hesslocal.block<nlocalparms0, nlocalparms0>(localparmidx0, localparmidx0);
+//         hessfull.block<nlocalparms0, nlocalparms1>(fullparmidx0, fullparmidx1) += hesslocal.block<nlocalparms0, nlocalparms1>(localparmidx0, localparmidx1);
+// 
+//         hessfull.block<nlocalparms1, nlocalparms1>(fullparmidx1, fullparmidx1) += hesslocal.block<nlocalparms1, nlocalparms1>(localparmidx1, localparmidx1);
+//         
+//         //extra part
+//         hessfull.block<nlocalstate, nvtxstate>(fullstateidx, fullvtxidx) += hesslocal.block<nvtxstate, nlocalstate>(localvtxidx, localstateidx).transpose();
         
       }
 
@@ -1323,14 +1411,56 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
 //       std::cout << nparsEloss << std::endl;
 //       std::cout << parmidx << std::endl;
       
+      assert(trackstateidx == nstateparms);
       assert(parmidx == (nparsBfield + nparsEloss));
       assert(alignmentparmidx == nparsAlignment);
+      
+//       if (nhits != nvalid) {
+//         continue;
+//       }
       
       //now do the expensive calculations and fill outputs
       
       //symmetrize the matrix (previous block operations do not guarantee that the needed blocks are filled)
       //TODO handle this more efficiently?
-      hessfull.triangularView<StrictlyLower>() = hessfull.triangularView<StrictlyUpper>().transpose();
+//       hessfull.triangularView<StrictlyLower>() = hessfull.triangularView<StrictlyUpper>().transpose();
+      
+//       for (unsigned int i=0; i<3; ++i) {
+//         gradfull[i] = 0.;
+//         hessfull.row(i) *= 0.;
+//         hessfull.col(i) *= 0.;
+//         hessfull(i,i) = 1e6;
+//       }
+      
+//       for (auto trackstateidx : trackstateidxarr) {
+//         for (unsigned int i = trackstateidx; i < (trackstateidx + 1); ++i) {
+//           gradfull[i] = 0.;
+//           hessfull.row(i) *= 0.;
+//           hessfull.col(i) *= 0.;
+//           hessfull(i,i) = 1e6;
+//         }
+//       }
+      
+//       {
+//         unsigned int i = trackstateidxarr[1];
+//         gradfull[i] = 0.;
+//         hessfull.row(i) *= 0.;
+//         hessfull.col(i) *= 0.;
+//         hessfull(i,i) = 1e6; 
+//       }
+//       
+      
+//       std::cout << "gradfull:" << std::endl;
+//       std::cout << gradfull << std::endl;
+//       
+//       std::cout << "gradfull.head(nstateparms):" << std::endl;
+//       std::cout << gradfull.head(nstateparms) << std::endl;
+// 
+//       std::cout << "gradfull.tail(npars):" << std::endl;
+//       std::cout << gradfull.tail(npars) << std::endl;
+//       
+//       std::cout << "hessfull.diagonal():" << std::endl;
+//       std::cout << hessfull.diagonal() << std::endl;
       
       auto const& dchisqdx = gradfull.head(nstateparms);
       auto const& dchisqdparms = gradfull.tail(npars);
@@ -1339,6 +1469,11 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
       auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
       
+//       SelfAdjointEigenSolver<MatrixXd> es(d2chisqdx2, EigenvaluesOnly);
+//       const double condition = es.eigenvalues()[nstateparms-1]/es.eigenvalues()[0];
+//       std::cout << "eigenvalues:" << std::endl;
+//       std::cout << es.eigenvalues().transpose() << std::endl;
+//       std::cout << "condition: " << condition << std::endl;
       
       Cinvd.compute(d2chisqdx2);
       
@@ -1388,6 +1523,9 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         const AlgebraicVector6 glob = refFts.parameters().vector();
         
         const Matrix<double, 5, 1> dxcurv = jac.leftCols(nstateparms)*dxfull;
+//         const Matrix<double, 5, 1> dxcurv = Matrix<double, 5, 1>::Zero();
+        
+//         std::cout << "id = " << id << ", dxcurv = " << dxcurv << std::endl;
         
         const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + Map<const Matrix<double, 6, 5, RowMajor>>(jaccurv2cart.Array())*dxcurv;
         
@@ -1576,14 +1714,52 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
 
       
 //       const Matrix3d covvtx = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<3,3>();
-      
-//       const VectorXd cinvrow0 = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).row(0).head(nstateparms);
-      
+//       
+//       const double covqop0 = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms))(trackstateidxarr[0], trackstateidxarr[0]);
+//       const double covqop1 = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms))(trackstateidxarr[1], trackstateidxarr[1]);
+//       
+//       const double covqop0kin = outparts[0]->currentState().freeTrajectoryState().curvilinearError().matrix()(0,0);
+//       const double covqop1kin = outparts[1]->currentState().freeTrajectoryState().curvilinearError().matrix()(0,0);
+//       
+//       Matrix<double, 1, 1> covmass = 2.*massjac*Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms))*massjac.transpose();
+//       
+// //       const VectorXd cinvrow0 = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).row(0).head(nstateparms);
+//       
 //       std::cout << "kinfit covariance:" << std::endl;
 //       std::cout << dimu_vertex->error().matrix() << std::endl;
 //       
 //       std::cout << "GBL covariance:" << std::endl;
 //       std::cout << 2.*covvtx << std::endl;
+//       
+//       std::cout << "kinfit qop0 covariance:" << std::endl;
+//       std::cout << covqop0kin << std::endl;
+//       
+//       std::cout << "GBL qop0 covariance:" << std::endl;
+//       std::cout << 2.*covqop0 << std::endl;
+//       
+//       std::cout << "kinfit qop1 covariance:" << std::endl;
+//       std::cout << covqop1kin << std::endl;
+//       
+//       std::cout << "GBL qop1 covariance:" << std::endl;
+//       std::cout << 2.*covqop1 << std::endl;
+//       
+//       std::cout << "dqop0 beamline" << std::endl;
+//       std::cout << dxfull[trackstateidxarr[0]] << std::endl;
+//       std::cout << "dqop0 first layer" << std::endl;
+//       std::cout << dxfull[trackstateidxarr[0]+3] << std::endl;
+//       std::cout << "dqop0 second layer" << std::endl;
+//       std::cout << dxfull[trackstateidxarr[0]+6] << std::endl;
+//       
+//       std::cout << "dqop1 beamline" << std::endl;
+//       std::cout << dxfull[trackstateidxarr[1]] << std::endl;
+//       std::cout << "dqop1 first layer" << std::endl;
+//       std::cout << dxfull[trackstateidxarr[1]+3] << std::endl;
+//       std::cout << "dqop1 second layer" << std::endl;
+//       std::cout << dxfull[trackstateidxarr[1]+6] << std::endl;
+//       
+//       std::cout << "sigmam" << std::endl;
+//       std::cout << std::sqrt(covmass[0]) << std::endl;
+      
 //       
 //       std::cout << "cinvrow0" << std::endl;
 //       std::cout << cinvrow0 << std::endl;
@@ -1607,18 +1783,22 @@ Matrix<double, 1, 6> ResidualGlobalCorrectionMakerTwoTrack::massJacobian(const F
   const double e1 = std::sqrt(state1.momentum().mag2() + dmass*dmass);
   
   // dm^2/dp0x
-  res(0) = 2.*e1*state0.momentum().x()/e0 - 2.*state1.momentum().x();
+  res(0, 0) = 2.*e1*state0.momentum().x()/e0 - 2.*state1.momentum().x();
   // dm^2/dp0y
-  res(1) = 2.*e1*state0.momentum().y()/e0 - 2.*state1.momentum().y();
+  res(0, 1) = 2.*e1*state0.momentum().y()/e0 - 2.*state1.momentum().y();
   // dm^2/dp0z
-  res(2) = 2.*e1*state0.momentum().z()/e0 - 2.*state1.momentum().z();
+  res(0, 2) = 2.*e1*state0.momentum().z()/e0 - 2.*state1.momentum().z();
   
   // d^m/dp1x
-  res(3) = 2.*e0*state1.momentum().x()/e1 - 2.*state0.momentum().x();
+  res(0, 3) = 2.*e0*state1.momentum().x()/e1 - 2.*state0.momentum().x();
   // d^m/dp1y
-  res(4) = 2.*e0*state1.momentum().y()/e1 - 2.*state0.momentum().y();
+  res(0, 4) = 2.*e0*state1.momentum().y()/e1 - 2.*state0.momentum().y();
   // d^m/dp1z
-  res(5) = 2.*e0*state1.momentum().z()/e1 - 2.*state0.momentum().z();
+  res(0, 5) = 2.*e0*state1.momentum().z()/e1 - 2.*state0.momentum().z();
+  
+  const double m = std::sqrt(2.*dmass*dmass + 2.*e0*e1 - 2.*state0.momentum().x()*state1.momentum().x() - 2.*state0.momentum().y()*state1.momentum().y() - 2.*state0.momentum().z()*state1.momentum().z());
+  
+  res *= 0.5/m;
   
   return res;
 }

@@ -1951,6 +1951,115 @@ AlgebraicVector5 ResidualGlobalCorrectionMakerBase::update(const TrajectoryState
   return AlgebraicVector5();
 }
 
+#if 0
+Matrix<double, 5, 3> ResidualGlobalCorrectionMakerBase::vertexToCurvilinearJacobian(const FreeTrajectoryState &state) const {
+  GlobalVector xt = state.momentum();
+  GlobalVector yt(-xt.y(), xt.x(), 0.);
+  GlobalVector zt = xt.cross(yt);
+  const GlobalVector& pvec = state.momentum();
+  double pt = pvec.perp(), p = pvec.mag();
+  double px = pvec.x(), py = pvec.y(), pz = pvec.z();
+  double pt2 = pt * pt, p2 = p * p, p3 = p * p * p;
+
+  xt = xt.unit();
+  if (fabs(pt) > 0) {
+    yt = yt.unit();
+    zt = zt.unit();
+  }
+
+  Matrix<double, 3, 3> R;
+  R(0, 0) = xt.x();
+  R(0, 1) = xt.y();
+  R(0, 2) = xt.z();
+  R(1, 0) = yt.x();
+  R(1, 1) = yt.y();
+  R(1, 2) = yt.z();
+  R(2, 0) = zt.x();
+  R(2, 1) = zt.y();
+  R(2, 2) = zt.z();
+  
+  const Matrix<double, 1, 3> dsdvtx = R.row(0);
+  
+  const MagneticField &bfield = state.parameters().magneticField();
+
+  const Vector3d b(bfield.x(),
+                      bfield.y(),
+                      bfield.z());
+  const double magb = b.norm();
+  const Vector3d h = b.normalized();
+
+  const Vector3d p0(state.momentum().x(),
+                      state.momentum().y(),
+                      state.momentum().z());
+  const Vector3d M0(state.position().x(),
+                    state.position().y(),
+                    state.position().z());
+  const Vector3d T0 = p0.normalized();
+  const double p = p0.norm();
+  const double q = state.charge();
+  const double qop = q/p;
+
+  const Vector3d N0alpha = h.cross(T0);
+  const double alpha = N0alpha.norm();
+  const Vector3d N0 = N0alpha.normalized();
+  const double gamma0 = h.transpose()*T0;
+  const Vector3d Z(0.,0.,1.);
+  const Vector3d U = Z.cross(T).normalized();
+  const Vector3d V = T.cross(U);
+  
+  
+  
+  Matrix<double, 5, 3> res = Matrix<double, 5, 3>::Zero();
+  
+  // d(dxt, dyt) / dvtx
+  res.bottomRows<2>() = R.bottomRows<2>();
+  
+}
+#endif
+
+Matrix<double, 6, 6> ResidualGlobalCorrectionMakerBase::cartesianToCartesianJacobian(const FreeTrajectoryState &state) const {
+  const GlobalVector &bfield = state.parameters().magneticFieldInInverseGeV();
+
+  const Vector3d b(bfield.x(),
+                      bfield.y(),
+                      bfield.z());
+  const double magb = b.norm();
+  const Vector3d h = b.normalized();
+
+  const Vector3d p0(state.momentum().x(),
+                      state.momentum().y(),
+                      state.momentum().z());
+//   const Vector3d M0(state.position().x(),
+//                     state.position().y(),
+//                     state.position().z());
+  const Vector3d T0 = p0.normalized();
+  const double p = p0.norm();
+  const double q = state.charge();
+  const double qop = q/p;
+
+  const Vector3d N0alpha = h.cross(T0);
+  const double alpha = N0alpha.norm();
+  const Vector3d N0 = N0alpha.normalized();
+//   const double gamma0 = h.transpose()*T0;
+//   const Vector3d Z(0.,0.,1.);
+//   const Vector3d U = Z.cross(T).normalized();
+//   const Vector3d V = T.cross(U);
+  
+  Matrix<double, 6, 6> res = Matrix<double, 6, 6>::Identity();
+  
+  //dp/dvtx
+  res.bottomLeftCorner<3, 3>() = -alpha*magb*qop*N0*p0.transpose();
+  
+  res = Matrix<double, 6, 6>::Zero();
+  
+  res *= 0.;
+//   res *= -1.;
+  
+  return res;
+  
+  
+  
+}
 
 
 //define this as a plug-in
