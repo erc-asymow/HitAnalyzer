@@ -203,6 +203,14 @@ protected:
                                                              const double& s,
                                                              const GlobalVector& bfield) const;
                                                              
+  Matrix<double, 5, 7> hybrid2curvTransportJacobian(const FreeTrajectoryState& start,
+                                              const std::pair<TrajectoryStateOnSurface, double>& propresult) const;
+                                              
+  Matrix<double, 5, 7> hybrid2curvTransportJacobian(const GlobalTrajectoryParameters& globalSource,
+                                                             const GlobalTrajectoryParameters& globalDest,
+                                                             const double& s,
+                                                             const GlobalVector& bfield) const;
+                                                             
   AlgebraicVector5 localMSConvolution(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const;
                                                              
   Matrix<double, 5, 6> materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
