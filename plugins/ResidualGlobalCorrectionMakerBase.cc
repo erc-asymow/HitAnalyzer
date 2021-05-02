@@ -275,6 +275,10 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   edm::ESHandle<TrackerTopology> trackerTopology;
   es.get<TrackerTopologyRcd>().get(trackerTopology);
   
+  edm::ESHandle<Propagator> thePropagator;
+  es.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
+  const MagneticField* field = thePropagator->magneticField();
+  
   detidparms.clear();
   
   std::set<std::pair<int, DetId> > parmset;
@@ -339,6 +343,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   float phi;
   float rho;
   float xi;
+  float bx;
+  float by;
+  float bz;
 
   runtree->Branch("iidx", &iidx);
   runtree->Branch("parmtype", &parmtype);
@@ -353,6 +360,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   runtree->Branch("phi", &phi);
   runtree->Branch("rho", &rho);
   runtree->Branch("xi", &xi);
+  runtree->Branch("bx", &bx);
+  runtree->Branch("by", &by);
+  runtree->Branch("bz", &bz);
   
   unsigned int globalidx = 0;
   for (const auto& key: parmset) {
@@ -360,6 +370,12 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     //fill info
     const DetId& detid = key.second;
     const GeomDet* det = globalGeometry->idToDet(detid);
+    
+//     if (detid.rawId() == 302122272) {
+//       std::cout << "width: " << det->surface().bounds().width() << std::endl;
+//       std::cout << "length: " << det->surface().bounds().length() << std::endl;
+//       std::cout << "thickness: " << det->surface().bounds().thickness() << std::endl;
+//     }
     
     layer = 0;
     stereo = 0;
@@ -431,6 +447,11 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     phi = det->surface().position().phi();
     rho = det->surface().position().perp();
     xi = det->surface().mediumProperties().xi();
+    
+    auto const bfieldval = field->inTesla(det->surface().position());
+    bx = bfieldval.x();
+    by = bfieldval.y();
+    bz = bfieldval.z();
     
     //fill map
     detidparms.emplace(key, globalidx);
@@ -1034,11 +1055,22 @@ Matrix<double, 5, 7> ResidualGlobalCorrectionMakerBase::hybrid2curvTransportJaco
   const FreeTrajectoryState& state0 = start;
   const FreeTrajectoryState& state1 = end;
   const GlobalVector& h = start.parameters().magneticFieldInInverseGeV();
+//   const GlobalVector h = 0.5*(start.parameters().magneticFieldInInverseGeV() + end.parameters().magneticFieldInInverseGeV());
   const double s = propresult.second;
   
   const Matrix<double, 5, 7> FdF = hybrid2curvTransportJacobian(state0.parameters(), state1.parameters(), s, h);
+  
+//   const Matrix<double, 5, 7> FdFvar = hybrid2curvTransportJacobianVar(state0.parameters(), state1.parameters(), s, h);
+  
+//   std::cout << "FdF hybrid:" << std::endl;
+//   std::cout << FdF << std::endl;
+  
+//   std::cout << "FdF hybrid var:" << std::endl;
+//   std::cout << FdFvar << std::endl;
+
 
   return FdF;
+//   return FdFvar;
 }
 
 Matrix<double, 5, 7> ResidualGlobalCorrectionMakerBase::hybrid2curvTransportJacobian(const GlobalTrajectoryParameters& globalSource,
@@ -1338,6 +1370,362 @@ Matrix<double, 5, 7> ResidualGlobalCorrectionMakerBase::hybrid2curvTransportJaco
                                                                
 }
 
+Matrix<double, 5, 7> ResidualGlobalCorrectionMakerBase::hybrid2curvTransportJacobianVar(const GlobalTrajectoryParameters& globalSource,
+                                                             const GlobalTrajectoryParameters& globalDest,
+                                                             const double& s,
+                                                             const GlobalVector& bfield) const {
+
+  const double qop0 = globalSource.signedInverseMomentum();
+
+    
+  const double x0 = globalSource.position().x();
+  const double y0 = globalSource.position().y();
+  const double z0 = globalSource.position().z();
+  
+//   const double p0 = globalSource.momentum().mag();
+//   const GlobalVector W0 = globalSource.momentum()/p0;
+//   const double W0x = W0.x();
+//   const double W0y = W0.y();
+//   const double W0z = W0.z();
+  
+  const double lam0 = M_PI_2 - globalSource.momentum().theta();
+  const double phi0 = globalSource.momentum().phi();
+  
+  const double B = bfield.mag();
+  const GlobalVector H = bfield/B;
+  const double hx = H.x();
+  const double hy = H.y();
+  const double hz = H.z();
+        
+  const double xf0 = std::sin(lam0);
+  const double xf1 = B*s;
+  const double xf2 = qop0*xf1;
+  const double xf3 = std::cos(xf2);
+  const double xf4 = xf0*xf3;
+  const double xf5 = std::sin(phi0);
+  const double xf6 = hx*xf5;
+  const double xf7 = std::cos(phi0);
+  const double xf8 = hy*xf7;
+  const double xf9 = xf6 - xf8;
+  const double xf10 = std::cos(lam0);
+  const double xf11 = std::sin(xf2);
+  const double xf12 = xf10*xf11;
+  const double xf13 = xf12*xf9;
+  const double xf14 = xf3 - 1;
+  const double xf15 = hz*xf0;
+  const double xf16 = hx*xf10;
+  const double xf17 = hy*xf10;
+  const double xf18 = xf15 + xf16*xf7 + xf17*xf5;
+  const double xf19 = xf14*xf18;
+  const double xf20 = hz*xf19;
+  const double xf21 = -xf13 - xf20 + xf4;
+  const double xf22 = xf10*xf3;
+  const double xf23 = xf22*xf5;
+  const double xf24 = hx*xf0;
+  const double xf25 = hz*xf10;
+  const double xf26 = xf25*xf7;
+  const double xf27 = xf24 - xf26;
+  const double xf28 = xf11*xf27;
+  const double xf29 = hy*xf19;
+  const double xf30 = xf23 + xf28 - xf29;
+  const double xf31 = xf22*xf7;
+  const double xf32 = hy*xf0;
+  const double xf33 = xf25*xf5;
+  const double xf34 = xf32 - xf33;
+  const double xf35 = xf11*xf34;
+  const double xf36 = hx*xf19;
+  const double xf37 = xf31 - xf35 - xf36;
+  const double xf38 = std::pow(xf37, 2);
+  const double xf39 = std::pow(xf30, 2) + xf38;
+  const double xf40 = 1.0/xf39;
+  const double xf41 = 1.0/(std::pow(xf21, 2)*xf40 + 1);
+  const double xf42 = xf0*xf11;
+  const double xf43 = -xf6 + xf8;
+  const double xf44 = xf22*xf43;
+  const double xf45 = hz*xf18;
+  const double xf46 = xf11*xf45;
+  const double xf47 = -xf1*xf42 + xf1*xf44 + xf1*xf46;
+  const double xf48 = std::pow(xf39, -1.0/2.0);
+  const double xf49 = xf12*xf5;
+  const double xf50 = xf1*xf49;
+  const double xf51 = 2*xf50;
+  const double xf52 = xf1*xf3;
+  const double xf53 = xf27*xf52;
+  const double xf54 = hy*xf18;
+  const double xf55 = xf1*xf11;
+  const double xf56 = xf54*xf55;
+  const double xf57 = 2*xf56;
+  const double xf58 = (1.0/2.0)*xf30;
+  const double xf59 = xf12*xf7;
+  const double xf60 = xf1*xf59;
+  const double xf61 = -xf32 + xf33;
+  const double xf62 = xf52*xf61;
+  const double xf63 = hx*xf18;
+  const double xf64 = xf55*xf63;
+  const double xf65 = -2*xf60 + 2*xf62 + 2*xf64;
+  const double xf66 = (1.0/2.0)*xf37;
+  const double xf67 = -xf65*xf66;
+  const double xf68 = xf21/std::pow(xf39, 3.0/2.0);
+  const double xf69 = B*z0;
+  const double xf70 = xf14*xf9;
+  const double xf71 = -xf11 + xf2;
+  const double xf72 = qop0*xf69 + xf10*xf70 + xf42 + xf45*xf71;
+  const double xf73 = 1.0/B;
+  const double xf74 = xf73/std::pow(qop0, 2);
+  const double xf75 = xf72*xf74;
+  const double xf76 = xf1 - xf52;
+  const double xf77 = 1.0/qop0;
+  const double xf78 = xf73*xf77;
+  const double xf79 = xf78*(-xf1*xf13 + xf1*xf4 + xf45*xf76 + xf69);
+  const double xf80 = B*y0;
+  const double xf81 = qop0*xf80 - xf14*xf27 + xf49 + xf54*xf71;
+  const double xf82 = xf74*xf81;
+  const double xf83 = xf78*(xf1*xf23 + xf1*xf28 + xf54*xf76 + xf80);
+  const double xf84 = B*x0;
+  const double xf85 = qop0*xf84 + xf14*xf34 + xf59 + xf63*xf71;
+  const double xf86 = xf74*xf85;
+  const double xf87 = xf78*(xf1*xf31 - xf1*xf35 + xf63*xf76 + xf84);
+  const double xf88 = -xf21*(-xf75 + xf79) - xf30*(-xf82 + xf83) - xf37*(-xf86 + xf87);
+  const double xf89 = B*qop0;
+  const double xf90 = -xf42*xf89 + xf44*xf89 + xf46*xf89;
+  const double xf91 = xf49*xf89;
+  const double xf92 = 2*xf91;
+  const double xf93 = xf3*xf89;
+  const double xf94 = xf27*xf93;
+  const double xf95 = xf11*xf89;
+  const double xf96 = xf54*xf95;
+  const double xf97 = 2*xf96;
+  const double xf98 = xf59*xf89;
+  const double xf99 = xf61*xf93;
+  const double xf100 = xf63*xf95;
+  const double xf101 = 2*xf100 - 2*xf98 + 2*xf99;
+  const double xf102 = -xf101*xf66;
+  const double xf103 = xf41*(xf48*xf90 + xf68*(xf102 - xf58*(-xf92 + 2*xf94 + xf97)));
+  const double xf104 = -xf24*xf7 + xf25 - xf32*xf5;
+  const double xf105 = hz*xf104;
+  const double xf106 = -xf105*xf14 + xf22 - xf42*xf43;
+  const double xf107 = xf4*xf5;
+  const double xf108 = 2*xf107;
+  const double xf109 = xf15*xf7;
+  const double xf110 = xf109 + xf16;
+  const double xf111 = xf11*xf110;
+  const double xf112 = xf104*xf14;
+  const double xf113 = hy*xf112;
+  const double xf114 = 2*xf113;
+  const double xf115 = xf4*xf7;
+  const double xf116 = xf15*xf5;
+  const double xf117 = xf11*(-xf116 - xf17);
+  const double xf118 = hx*xf112;
+  const double xf119 = -2*xf115 + 2*xf117 - 2*xf118;
+  const double xf120 = -xf119*xf66;
+  const double xf121 = -xf0*xf70 + xf105*xf71 + xf12;
+  const double xf122 = xf21*xf78;
+  const double xf123 = xf104*xf71;
+  const double xf124 = hx*xf123 + xf14*(xf116 + xf17) - xf42*xf7;
+  const double xf125 = xf37*xf78;
+  const double xf126 = 1 - xf3;
+  const double xf127 = hy*xf123 + xf110*xf126 - xf42*xf5;
+  const double xf128 = xf30*xf78;
+  const double xf129 = -xf121*xf122 - xf124*xf125 - xf127*xf128;
+  const double xf130 = hx*xf7;
+  const double xf131 = hy*xf5;
+  const double xf132 = -xf10*xf6 + xf10*xf8;
+  const double xf133 = hz*xf132;
+  const double xf134 = xf12*(-xf130 - xf131) - xf133*xf14;
+  const double xf135 = 2*xf31;
+  const double xf136 = xf11*xf33;
+  const double xf137 = 2*xf136;
+  const double xf138 = xf132*xf14;
+  const double xf139 = hy*xf138;
+  const double xf140 = 2*xf139;
+  const double xf141 = xf11*xf26;
+  const double xf142 = hx*xf138;
+  const double xf143 = 2*xf141 - 2*xf142 - 2*xf23;
+  const double xf144 = -xf143*xf66;
+  const double xf145 = xf10*xf14*(xf130 + xf131) + xf133*xf71;
+  const double xf146 = xf132*xf71;
+  const double xf147 = hy*xf146 + xf126*xf33 + xf59;
+  const double xf148 = hx*xf146 - xf14*xf26 - xf49;
+  const double xf149 = -xf122*xf145 - xf125*xf148 - xf128*xf147;
+  const double xf150 = -xf31;
+  const double xf151 = xf150 + xf35 + xf36;
+  const double xf152 = -xf23;
+  const double xf153 = xf152 - xf28 + xf29;
+  const double xf154 = xf13 + xf20 - xf4;
+  const double xf155 = qop0*s;
+  const double xf156 = -xf155*xf42 + xf155*xf44 + xf155*xf46;
+  const double xf157 = xf155*xf49;
+  const double xf158 = 2*xf157;
+  const double xf159 = xf155*xf3;
+  const double xf160 = xf159*xf27;
+  const double xf161 = xf11*xf155;
+  const double xf162 = xf161*xf54;
+  const double xf163 = 2*xf162;
+  const double xf164 = xf155*xf59;
+  const double xf165 = xf159*xf61;
+  const double xf166 = xf161*xf63;
+  const double xf167 = -2*xf164 + 2*xf165 + 2*xf166;
+  const double xf168 = -xf167*xf66;
+  const double xf169 = xf77/std::pow(B, 2);
+  const double xf170 = xf169*xf72;
+  const double xf171 = xf155 - xf159;
+  const double xf172 = xf78*(qop0*z0 - xf13*xf155 + xf155*xf4 + xf171*xf45);
+  const double xf173 = xf169*xf81;
+  const double xf174 = xf78*(qop0*y0 + xf155*xf23 + xf155*xf28 + xf171*xf54);
+  const double xf175 = xf169*xf85;
+  const double xf176 = xf78*(qop0*x0 + xf155*xf31 - xf155*xf35 + xf171*xf63);
+  const double xf177 = -xf21*(-xf170 + xf172) - xf30*(-xf173 + xf174) - xf37*(-xf175 + xf176);
+  const double xf178 = -xf50 + xf53 + xf56;
+  const double xf179 = xf37*xf40;
+  const double xf180 = -xf60 + xf62 + xf64;
+  const double xf181 = xf153*xf40;
+  const double xf182 = -xf91 + xf94 + xf96;
+  const double xf183 = xf100 - xf98 + xf99;
+  const double xf184 = xf179*xf182 + xf181*xf183;
+  const double xf185 = -xf107 + xf111 - xf113;
+  const double xf186 = -xf115 + xf117 - xf118;
+  const double xf187 = xf136 - xf139 + xf31;
+  const double xf188 = xf141 - xf142 + xf152;
+  const double xf189 = -xf157 + xf160 + xf162;
+  const double xf190 = -xf164 + xf165 + xf166;
+  const double xf191 = std::pow(xf153, 2) + xf38;
+  const double xf192 = std::pow(xf191, -1.0/2.0);
+  const double xf193 = xf153*xf192;
+  const double xf194 = xf192*xf37;
+  const double xf195 = -xf24 + xf26;
+  const double xf196 = xf195*xf52;
+  const double xf197 = xf196 + xf50 - xf56;
+  const double xf198 = xf192*xf78;
+  const double xf199 = xf198*xf85;
+  const double xf200 = xf198*xf81;
+  const double xf201 = std::pow(xf191, -3.0/2.0);
+  const double xf202 = (1.0/2.0)*xf153;
+  const double xf203 = -xf202*(2*xf196 + xf51 - xf57) + xf67;
+  const double xf204 = xf201*xf203;
+  const double xf205 = xf78*xf85;
+  const double xf206 = xf153*xf205;
+  const double xf207 = xf125*xf81;
+  const double xf208 = xf89 - xf93;
+  const double xf209 = xf208*xf54 + xf23*xf89 + xf28*xf89;
+  const double xf210 = xf194*xf78;
+  const double xf211 = xf208*xf63 + xf31*xf89 - xf35*xf89;
+  const double xf212 = xf193*xf78;
+  const double xf213 = xf195*xf93;
+  const double xf214 = xf213 + xf91 - xf96;
+  const double xf215 = xf102 - xf202*(2*xf213 + xf92 - xf97);
+  const double xf216 = xf201*xf215;
+  const double xf217 = xf153*xf216;
+  const double xf218 = xf183*xf200 + xf199*xf214 + xf205*xf217 + xf207*xf216 + xf209*xf210 + xf211*xf212;
+  const double xf219 = xf11*(-xf109 - xf16);
+  const double xf220 = xf107 + xf113 + xf219;
+  const double xf221 = xf120 - xf202*(xf108 + xf114 + 2*xf219);
+  const double xf222 = xf201*xf221;
+  const double xf223 = -xf136 + xf139 + xf150;
+  const double xf224 = xf144 - xf202*(-xf135 - xf137 + xf140);
+  const double xf225 = xf201*xf224;
+  const double xf226 = xf159*xf195;
+  const double xf227 = xf157 - xf162 + xf226;
+  const double xf228 = xf168 - xf202*(xf158 - xf163 + 2*xf226);
+  const double xf229 = xf201*xf228;
+  const double xf230 = xf194*xf21;
+  const double xf231 = xf193*xf21;
+  const double xf232 = xf210*xf85;
+  const double xf233 = xf212*xf81;
+  const double xf234 = xf122*xf192;
+  const double xf235 = xf234*xf85;
+  const double xf236 = xf234*xf81;
+  const double xf237 = xf192*xf38 - xf193*xf30;
+  const double xf238 = xf125*xf21*xf85;
+  const double xf239 = xf122*xf81;
+  const double xf240 = xf153*xf239;
+  const double xf241 = xf192*xf30;
+  const double xf242 = xf201*xf38;
+  const double xf243 = xf153*xf30;
+  const double xf244 = xf201*xf243;
+  const double xf245 = xf72*xf78;
+  const double xf246 = xf231*xf78;
+  const double xf247 = xf230*xf78;
+  const double xf248 = xf237*xf78;
+  const double xf249 = -xf183*xf235 + xf209*xf246 - xf211*xf247 + xf214*xf236 - xf216*xf238 + xf217*xf239 - xf232*xf90 + xf233*xf90 + xf245*(xf101*xf194 - xf182*xf193 - xf214*xf241 + xf215*xf242 - xf216*xf243) + xf248*(-xf13*xf89 + xf208*xf45 + xf4*xf89);
+  const double dqopdqop0 = 1;
+  const double dqopdlam0 = 0;
+  const double dqopdphi0 = 0;
+  const double dqopdx0 = 0;
+  const double dqopdy0 = 0;
+  const double dqopdz0 = 0;
+  const double dqopdB = 0;
+  const double dlamdqop0 = xf103*xf88 + xf41*(xf47*xf48 + xf68*(-xf58*(-xf51 + 2*xf53 + xf57) + xf67));
+  const double dlamdlam0 = xf103*xf129 + xf41*(xf106*xf48 + xf68*(xf120 - xf58*(-xf108 + 2*xf111 - xf114)));
+  const double dlamdphi0 = xf103*xf149 + xf41*(xf134*xf48 + xf68*(xf144 - xf58*(xf135 + xf137 - xf140)));
+  const double dlamdx0 = xf103*xf151;
+  const double dlamdy0 = xf103*xf153;
+  const double dlamdz0 = xf103*xf154;
+  const double dlamdB = xf103*xf177 + xf41*(xf156*xf48 + xf68*(xf168 - xf58*(-xf158 + 2*xf160 + xf163)));
+  const double dphidqop0 = xf178*xf179 + xf180*xf181 + xf184*xf88;
+  const double dphidlam0 = xf129*xf184 + xf179*xf185 + xf181*xf186;
+  const double dphidphi0 = xf149*xf184 + xf179*xf187 + xf181*xf188;
+  const double dphidx0 = xf151*xf184;
+  const double dphidy0 = xf153*xf184;
+  const double dphidz0 = xf154*xf184;
+  const double dphidB = xf177*xf184 + xf179*xf189 + xf181*xf190;
+  const double dxtdqop0 = xf180*xf200 - xf193*xf86 + xf193*xf87 - xf194*xf82 + xf194*xf83 + xf197*xf199 + xf204*xf206 + xf204*xf207 + xf218*xf88;
+  const double dxtdlam0 = xf124*xf212 + xf127*xf210 + xf129*xf218 + xf186*xf200 + xf199*xf220 + xf206*xf222 + xf207*xf222;
+  const double dxtdphi0 = xf147*xf210 + xf148*xf212 + xf149*xf218 + xf188*xf200 + xf199*xf223 + xf206*xf225 + xf207*xf225;
+  const double dxtdx0 = xf151*xf218 + xf193;
+  const double dxtdy0 = xf153*xf218 + xf194;
+  const double dxtdz0 = xf154*xf218;
+  const double dxtdB = -xf173*xf194 + xf174*xf194 - xf175*xf193 + xf176*xf193 + xf177*xf218 + xf190*xf200 + xf199*xf227 + xf206*xf229 + xf207*xf229;
+  const double dytdqop0 = -xf180*xf235 + xf197*xf236 - xf204*xf238 + xf204*xf240 + xf230*xf86 - xf230*xf87 - xf231*xf82 + xf231*xf83 - xf232*xf47 + xf233*xf47 - xf237*xf75 + xf237*xf79 + xf245*(-xf178*xf193 + xf194*xf65 - xf197*xf241 + xf203*xf242 - xf203*xf244) + xf249*xf88;
+  const double dytdlam0 = -xf106*xf232 + xf106*xf233 + xf121*xf248 - xf124*xf247 + xf127*xf246 + xf129*xf249 - xf186*xf235 + xf220*xf236 - xf222*xf238 + xf222*xf240 + xf245*(xf119*xf194 - xf185*xf193 - xf220*xf241 + xf221*xf242 - xf221*xf244);
+  const double dytdphi0 = -xf134*xf232 + xf134*xf233 + xf145*xf248 + xf147*xf246 - xf148*xf247 + xf149*xf249 - xf188*xf235 + xf223*xf236 - xf225*xf238 + xf225*xf240 + xf245*(xf143*xf194 - xf187*xf193 - xf223*xf241 + xf224*xf242 - xf224*xf244);
+  const double dytdx0 = xf151*xf249 - xf230;
+  const double dytdy0 = xf153*xf249 + xf231;
+  const double dytdz0 = xf154*xf249 + xf237;
+  const double dytdB = -xf156*xf232 + xf156*xf233 - xf170*xf237 + xf172*xf237 - xf173*xf231 + xf174*xf231 + xf175*xf230 - xf176*xf230 + xf177*xf249 - xf190*xf235 + xf227*xf236 - xf229*xf238 + xf229*xf240 + xf245*(xf167*xf194 - xf189*xf193 - xf227*xf241 + xf228*xf242 - xf228*xf244);
+  Matrix<double, 5, 7> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdx0;
+  res(0,4) = dqopdy0;
+  res(0,5) = dqopdz0;
+  res(0,6) = dqopdB;
+  res(1,0) = dlamdqop0;
+  res(1,1) = dlamdlam0;
+  res(1,2) = dlamdphi0;
+  res(1,3) = dlamdx0;
+  res(1,4) = dlamdy0;
+  res(1,5) = dlamdz0;
+  res(1,6) = dlamdB;
+  res(2,0) = dphidqop0;
+  res(2,1) = dphidlam0;
+  res(2,2) = dphidphi0;
+  res(2,3) = dphidx0;
+  res(2,4) = dphidy0;
+  res(2,5) = dphidz0;
+  res(2,6) = dphidB;
+  res(3,0) = dxtdqop0;
+  res(3,1) = dxtdlam0;
+  res(3,2) = dxtdphi0;
+  res(3,3) = dxtdx0;
+  res(3,4) = dxtdy0;
+  res(3,5) = dxtdz0;
+  res(3,6) = dxtdB;
+  res(4,0) = dytdqop0;
+  res(4,1) = dytdlam0;
+  res(4,2) = dytdphi0;
+  res(4,3) = dytdx0;
+  res(4,4) = dytdy0;
+  res(4,5) = dytdz0;
+  res(4,6) = dytdB;
+
+  // convert to tesla for B field gradient
+  res.col(6) *= 2.99792458e-3;
+  
+  return res;
+                                                               
+}
+
 
 Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::localTransportJacobian(const TrajectoryStateOnSurface &start,
                                             const std::pair<TrajectoryStateOnSurface, double> &propresult,
@@ -1466,6 +1854,7 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::curv2curvTransportJacobi
   const FreeTrajectoryState& state0 = doReverse ? end : start;
   const FreeTrajectoryState& state1 = doReverse ? start : end;
   const GlobalVector& h = start.parameters().magneticFieldInInverseGeV();
+//   const GlobalVector h = 0.5*(start.parameters().magneticFieldInInverseGeV() + end.parameters().magneticFieldInInverseGeV());
   const double s = doReverse ? -propresult.second : propresult.second;
   
 //   // compute transport jacobian wrt curvlinear parameters

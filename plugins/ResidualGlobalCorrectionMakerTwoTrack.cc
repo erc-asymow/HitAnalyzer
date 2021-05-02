@@ -92,6 +92,18 @@ private:
   
   std::vector<float> Muplus_jacRef;
   std::vector<float> Muminus_jacRef;
+  
+  float chisqval;
+  unsigned int ndof;
+  
+  unsigned int Muplus_nhits;
+  unsigned int Muplus_nvalid;
+  unsigned int Muplus_nvalidpixel;
+  
+  unsigned int Muminus_nhits;
+  unsigned int Muminus_nvalid;
+  unsigned int Muminus_nvalidpixel;
+  
 
   
 };
@@ -162,6 +174,18 @@ void ResidualGlobalCorrectionMakerTwoTrack::beginStream(edm::StreamID streamid)
     
     tree->Branch("Muplus_jacRef", &Muplus_jacRef);
     tree->Branch("Muminus_jacRef", &Muminus_jacRef);
+    
+    tree->Branch("chisqval", &chisqval);
+    tree->Branch("ndof", &ndof);
+    
+    tree->Branch("Muplus_nhits", &Muplus_nhits);
+    tree->Branch("Muplus_nvalid", &Muplus_nvalid);
+    tree->Branch("Muplus_nvalidpixel", &Muplus_nvalidpixel);
+    
+    tree->Branch("Muminus_nhits", &Muminus_nhits);
+    tree->Branch("Muminus_nvalid", &Muminus_nvalid);
+    tree->Branch("Muminus_nvalidpixel", &Muminus_nvalidpixel);
+  
     
   }
 }
@@ -242,6 +266,45 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
     for (auto jtrack = itrack + 1; jtrack != trackOrigH->end(); ++jtrack) {
       const reco::TransientTrack jtt = TTBuilder->build(*jtrack);
       
+      
+      const reco::GenParticle *mu0gen = nullptr;
+      const reco::GenParticle *mu1gen = nullptr;
+      
+      double massconstraintval = massConstraint_;
+      if (doGen_) {
+        for (auto const &genpart : *genPartCollection) {
+          if (genpart.status() != 1) {
+            continue;
+          }
+          if (std::abs(genpart.pdgId()) != 13) {
+            continue;
+          }
+          
+          float dR0 = deltaR(genpart.phi(), itrack->phi(), genpart.eta(), itrack->eta());
+          if (dR0 < 0.1 && genpart.charge() == itrack->charge()) {
+            mu0gen = &genpart;
+          }
+          
+          float dR1 = deltaR(genpart.phi(), jtrack->phi(), genpart.eta(), jtrack->eta());
+          if (dR1 < 0.1 && genpart.charge() == jtrack->charge()) {
+            mu1gen = &genpart;
+          }
+        }
+        
+        if (mu0gen != nullptr && mu1gen != nullptr) {
+          auto const jpsigen = ROOT::Math::PtEtaPhiMVector(mu0gen->pt(), mu0gen->eta(), mu0gen->phi(), mmu) +
+                            ROOT::Math::PtEtaPhiMVector(mu1gen->pt(), mu1gen->eta(), mu1gen->phi(), mmu);
+
+          massconstraintval = jpsigen.mass();
+        }
+        else {
+          continue;
+        }
+        
+      }
+      
+//       std::cout << "massconstraintval = " << massconstraintval << std::endl;
+      
       // common vertex fit
       std::vector<RefCountedKinematicParticle> parts;
       
@@ -254,7 +317,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       RefCountedKinematicTree kinTree;
       if (doMassConstraint_) {
 //       if (false) {
-        TwoTrackMassKinematicConstraint constraint(massConstraint_);
+//         TwoTrackMassKinematicConstraint constraint(massConstraint_);
+        TwoTrackMassKinematicConstraint constraint(massconstraintval);
         KinematicConstrainedVertexFitter vtxFitter;
         kinTree = vtxFitter.fit(parts, &constraint);
       }
@@ -282,7 +346,20 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         std::cout << dimu_vertex->position() << std::endl;
       }
       
-      std::vector<RefCountedKinematicParticle> outparts = kinTree->finalStateParticles();
+      const std::vector<RefCountedKinematicParticle> outparts = kinTree->finalStateParticles();
+      std::array<FreeTrajectoryState, 2> refftsarr = {{ outparts[0]->currentState().freeTrajectoryState(),
+                                                        outparts[1]->currentState().freeTrajectoryState() }};
+                                                        
+      if (fitFromGenParms_ && mu0gen != nullptr && mu1gen != nullptr) {
+        GlobalPoint pos0(mu0gen->vertex().x(), mu0gen->vertex().y(), mu0gen->vertex().z());
+        GlobalVector mom0(mu0gen->momentum().x(), mu0gen->momentum().y(), mu0gen->momentum().z());
+        
+        GlobalPoint pos1(mu1gen->vertex().x(), mu1gen->vertex().y(), mu1gen->vertex().z());
+        GlobalVector mom1(mu1gen->momentum().x(), mu1gen->momentum().y(), mu1gen->momentum().z());
+        
+        refftsarr[0] = FreeTrajectoryState(pos0, mom0, mu0gen->charge(), field);
+        refftsarr[1] = FreeTrajectoryState(pos1, mom1, mu1gen->charge(), field);
+      }
       
       std::array<TransientTrackingRecHit::RecHitContainer, 2> hitsarr;
       
@@ -322,6 +399,20 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 hitquality = !pixhit->isOnEdge() && cluster.sizeX() > 1;
               }
               else {
+                assert(tkhit->cluster_strip().isNonnull());
+                const SiStripCluster& cluster = *tkhit->cluster_strip();
+                const StripTopology* striptopology = dynamic_cast<const StripTopology*>(&(detectorG->topology()));
+                assert(striptopology);
+                
+                const uint16_t firstStrip = cluster.firstStrip();
+                const uint16_t lastStrip = cluster.firstStrip() + cluster.amplitudes().size() - 1;
+                const bool isOnEdge = firstStrip == 0 || lastStrip == (striptopology->nstrips() - 1);
+                
+    //             if (isOnEdge) {
+    //               std::cout << "strip hit isOnEdge" << std::endl;
+    //             }
+                
+//                 hitquality = !isOnEdge;
                 hitquality = true;
               }
               
@@ -345,16 +436,25 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       unsigned int nvalid = 0;
       unsigned int nvalidpixel = 0;
       unsigned int nvalidalign2d = 0;
+      
+      std::array<unsigned int, 2> nhitsarr = {{ 0, 0 }};
+      std::array<unsigned int, 2> nvalidarr = {{ 0, 0 }};
+      std::array<unsigned int, 2> nvalidpixelarr = {{ 0, 0 }};
+      
       // second loop to count hits
-      for (auto const &hits : hitsarr) {
+      for (unsigned int id = 0; id < 2; ++id) {
+        auto const &hits = hitsarr[id];
         for (auto const &hit : hits) {
           ++nhits;
+          ++nhitsarr[id];
           if (hit->isValid()) {
             ++nvalid;
+            ++nvalidarr[id];
             
             const bool ispixel = GeomDetEnumerators::isTrackerPixel(hit->det()->subDetector());
             if (ispixel) {
               ++nvalidpixel;
+              ++nvalidpixelarr[id];
             }
             
             
@@ -397,8 +497,11 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       unsigned int parmidx = 0;
       unsigned int alignmentparmidx = 0;
       
+      double chisq0val = 0.;
+      
       for (unsigned int id = 0; id < 2; ++id) {
-        FreeTrajectoryState refFts = outparts[id]->currentState().freeTrajectoryState();
+//         FreeTrajectoryState refFts = outparts[id]->currentState().freeTrajectoryState();
+        const FreeTrajectoryState &refFts = refftsarr[id];
         auto &hits = hitsarr[id];
         
         trackstateidxarr[id] = trackstateidx;
@@ -494,6 +597,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
           //energy loss jacobian
           const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
         
+          const double xival = updtsos.surface().mediumProperties().xi();
+          
           //process noise jacobians
 //           const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
           
@@ -558,6 +663,12 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
           const Matrix<double, 5, 5> Hp = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacp.Array());
           
           if (ihit < (tracknhits-1)) {
+            
+//             std::cout << "EdE first hit:" << std::endl;
+//             std::cout << EdE << std::endl;
+//             
+//             std::cout << "xival = " << xival << std::endl;
+            
             AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
             const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
             
@@ -710,6 +821,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
               const MSScalar chisqeloss = deloss*invSigmaE*deloss;
               
               const MSScalar chisq = chisqms + chisqeloss;
+              
+              chisq0val += chisq.value().value();
               
               auto const& gradlocal = chisq.value().derivatives();
               //fill local hessian
@@ -877,6 +990,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
               const MSScalar chisqeloss = deloss*invSigmaE*deloss;
               
               const MSScalar chisq = chisqms + chisqeloss;
+              
+              chisq0val += chisq.value().value();
                 
               auto const& gradlocal = chisq.value().derivatives();
               //fill local hessian
@@ -1178,6 +1293,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
 
               Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
               AlignScalar chisq = dh.transpose()*Vinv*dh;
+              
+              chisq0val += chisq.value().value();
 
               auto const& gradlocal = chisq.value().derivatives();
               //fill local hessian
@@ -1278,8 +1395,11 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         using MScalar = AANT<double, nlocal>;
         
         //TODO optimize to avoid recomputation of FTS
-        const FreeTrajectoryState refFts0 = outparts[0]->currentState().freeTrajectoryState();
-        const FreeTrajectoryState refFts1 = outparts[1]->currentState().freeTrajectoryState();
+//         const FreeTrajectoryState refFts0 = outparts[0]->currentState().freeTrajectoryState();
+//         const FreeTrajectoryState refFts1 = outparts[1]->currentState().freeTrajectoryState();
+        
+        const FreeTrajectoryState &refFts0 = refftsarr[0];
+        const FreeTrajectoryState &refFts1 = refftsarr[1];
         
         const Matrix<double, 5, 7> &FdFpref0 = FdFprefarr[0];
         const Matrix<double, 5, 7> &FdFpref1 = FdFprefarr[1];
@@ -1363,6 +1483,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
 //         const MScalar chisq = dmsq*invSigmaMsq*dmsq;
         const MScalar chisq = invSigmaMsq*dmsq*dmsq;
         
+        chisq0val += chisq.value().value();
+        
         auto const& gradlocal = chisq.value().derivatives();
         //fill local hessian
         Matrix<double, nlocal, nlocal> hesslocal;
@@ -1425,6 +1547,25 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
 //       if (nhits != nvalid) {
 //         continue;
 //       }
+
+      auto freezeparm = [&](unsigned int idx) {
+        gradfull[idx] = 0.;
+        hessfull.row(idx) *= 0.;
+        hessfull.col(idx) *= 0.;
+        hessfull(idx,idx) = 1e6;
+      };
+      
+      if (fitFromGenParms_) {
+        for (unsigned int i=0; i<3; ++i) {
+          freezeparm(i);
+        }
+        for (unsigned int id = 0; id < 2; ++id) {
+          freezeparm(nstateparms + trackparmidxarr[id]);
+          for (unsigned int i=0; i<3; ++i) {
+            freezeparm(trackstateidxarr[id] + i);
+          }
+        }
+      }
       
       //now do the expensive calculations and fill outputs
       
@@ -1498,11 +1639,65 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
   //     hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
       hess = d2chisqdparms2 + dxdparms*d2chisqdxdparms;
       
+      
+      chisqval = chisq0val + (dchisqdx.transpose()*dxfull)[0] + (0.5*dxfull.transpose()*d2chisqdx2*dxfull)[0];
+      
+      ndof = 3*(nhits - 2) + nvalid + nvalidalign2d - nstateparms;
+      
+      if (doMassConstraint_) {
+        ++ndof;
+      }
+      
+//       std::cout << "dchisqdparms.head<6>()" << std::endl;
+//       std::cout << dchisqdparms.head<6>() << std::endl;
+//       
+//       std::cout << "grad.head<6>()" << std::endl;
+//       std::cout << grad.head<6>() << std::endl;
+//       
 //       std::cout << "d2chisqdparms2.topLeftCorner<6, 6>():" << std::endl;
 //       std::cout << d2chisqdparms2.topLeftCorner<6, 6>() << std::endl;
 //       std::cout << "hess.topLeftCorner<6, 6>():" << std::endl;
 //       std::cout << hess.topLeftCorner<6, 6>() << std::endl;
 //       
+//       std::cout << "dchisqdparms.segment<6>(nparsBfield+nparsEloss)" << std::endl;
+//       std::cout << dchisqdparms.segment<6>(nparsBfield+nparsEloss) << std::endl;
+//       
+//       std::cout << "grad.segment<6>(nparsBfield+nparsEloss)" << std::endl;
+//       std::cout << grad.segment<6>(nparsBfield+nparsEloss) << std::endl;
+//       
+//       std::cout << "d2chisqdparms2.block<6, 6>(nparsBfield+nparsEloss, nparsBfield+nparsEloss):" << std::endl;
+//       std::cout << d2chisqdparms2.block<6, 6>(nparsBfield+nparsEloss, nparsBfield+nparsEloss) << std::endl;
+//       std::cout << "hess.block<6, 6>(nparsBfield+nparsEloss, nparsBfield+nparsEloss):" << std::endl;
+//       std::cout << hess.block<6, 6>(nparsBfield+nparsEloss, nparsBfield+nparsEloss) << std::endl;
+// //       
+//       
+//       std::cout << "d2chisqdparms2.block<6, 6>(trackparmidxarr[1], trackparmidxarr[1]):" << std::endl;
+//       std::cout << d2chisqdparms2.block<6, 6>(trackparmidxarr[1], trackparmidxarr[1]) << std::endl;
+//       std::cout << "hess.block<6, 6>(trackparmidxarr[1], trackparmidxarr[1]):" << std::endl;
+//       std::cout << hess.block<6, 6>(trackparmidxarr[1], trackparmidxarr[1]) << std::endl;
+//       
+//       std::cout << "d2chisqdparms2.bottomRightCorner<6, 6>():" << std::endl;
+//       std::cout << d2chisqdparms2.bottomRightCorner<6, 6>() << std::endl;
+//       std::cout << "hess.bottomRightCorner<6, 6>():" << std::endl;
+//       std::cout << hess.bottomRightCorner<6, 6>() << std::endl;
+
+//       const double 
+// //       const double corxi0plusminus = hess(1, trackparmidxarr[1] + 1)/std::sqrt(hess(1,1)*hess(trackparmidxarr[1] + 1, trackparmidxarr[1] + 1));
+// //       const double corxi1plusminus = hess(3, trackparmidxarr[1] + 3)/std::sqrt(hess(3,3)*hess(trackparmidxarr[1] + 3, trackparmidxarr[1] + 3));
+//       
+//       const double cor01plus = hess(1, 3)/std::sqrt(hess(1, 1)*hess(3, 3));
+// //       const double cor01minus = hess(trackparmidxarr[1] + 1, trackparmidxarr[1] + 3)/std::sqrt(hess(trackparmidxarr[1] + 1, trackparmidxarr[1] + 1)*hess(trackparmidxarr[1] + 3, trackparmidxarr[1] + 3));
+// 
+//       const double cor12plus = hess(3, 5)/std::sqrt(hess(3, 3)*hess(5, 5));
+// //       const double cor12minus = hess(trackparmidxarr[1] + 3, trackparmidxarr[1] + 5)/std::sqrt(hess(trackparmidxarr[1] + 3, trackparmidxarr[1] + 3)*hess(trackparmidxarr[1] + 5, trackparmidxarr[1] + 5));
+//       
+// //       std::cout << "corxi0plusminus = " << corxi0plusminus << std::endl;
+// //       std::cout << "corxi1plusminus = " << corxi1plusminus << std::endl;
+//       std::cout << "cor01plus = " << cor01plus << std::endl;
+// //       std::cout << "cor01minus = " << cor01minus << std::endl;
+//       std::cout << "cor12plus = " << cor12plus << std::endl;
+// //       std::cout << "cor12minus = " << cor12minus << std::endl;
+      
 //       std::cout << "hess(1, 1)" << std::endl;
 //       std::cout << hess(1, 1) << std::endl;
 //       std::cout << "hess(trackparmidxarr[1] + 1, trackparmidxarr[1] + 1)" << std::endl;
@@ -1539,7 +1734,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       
       // apply the GBL fit results to the muon kinematics
       for (unsigned int id = 0; id < 2; ++id) {
-        auto const &refFts = outparts[id]->currentState().freeTrajectoryState();
+//         auto const &refFts = outparts[id]->currentState().freeTrajectoryState();
+        auto const &refFts = refftsarr[id];
         auto const &jac = jacarr[id];
         
 //         std::cout << refFts.position() << std::endl;
@@ -1608,6 +1804,14 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       Jpsi_eta = jpsimom.eta();
       Jpsi_phi = jpsimom.phi();
       Jpsi_mass = jpsimom.mass();
+      
+      Muplus_nhits = nhitsarr[idxplus];
+      Muplus_nvalid = nvalidarr[idxplus];
+      Muplus_nvalidpixel = nvalidpixelarr[idxplus];
+      
+      Muminus_nhits = nhitsarr[idxminus];
+      Muminus_nvalid = nvalidarr[idxminus];
+      Muminus_nvalidpixel = nvalidpixelarr[idxminus];
       
       const ROOT::Math::PxPyPzMVector mompluskin(outparts[idxplus]->currentState().globalMomentum().x(),
                                                         outparts[idxplus]->currentState().globalMomentum().y(),
@@ -1796,7 +2000,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
 //       
 //       std::cout << "GBL qop1 covariance:" << std::endl;
 //       std::cout << 2.*covqop1 << std::endl;
-//       
+      
 //       std::cout << "dqop0 beamline" << std::endl;
 //       std::cout << dxfull[trackstateidxarr[0]] << std::endl;
 //       std::cout << "dqop0 first layer" << std::endl;

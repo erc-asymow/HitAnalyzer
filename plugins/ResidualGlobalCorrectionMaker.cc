@@ -128,6 +128,9 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("simtestdxrec", &simtestdxrec);
     tree->Branch("simtestdy", &simtestdy);
     tree->Branch("simtestdyrec", &simtestdyrec);
+    tree->Branch("simtestdxprop", &simtestdxprop);
+    tree->Branch("simtestdyprop", &simtestdyprop);
+    tree->Branch("simtestdetid", &simtestdetid);
     
     tree->Branch("rx", &rx);
     tree->Branch("ry", &ry);
@@ -346,6 +349,9 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   simtestdxrec = -99.;
   simtestdy = -99.;
   simtestdyrec = -99.;
+  simtestdxprop = -99.;
+  simtestdyprop = -99.;
+  simtestdetid = 0;
   
   if (false) {
     
@@ -361,6 +367,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     if (genmuon) {
       genPt = genmuon->pt();
       genCharge = genmuon->charge();
+      genEta = genmuon->eta();
+      genPhi = genmuon->phi();
       
       simtestvz = genmuon->vertex().z();
       
@@ -384,10 +392,33 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       std::cout << "gen muon charge: " << genmuon->charge() << std::endl;
       
       TrajectoryStateOnSurface tsos;
-      
-      unsigned int ihit = 0;
+
+      std::vector<const PSimHit*> simhitsflat;
       for (auto const& simhith : simHits) {
         for (const PSimHit& simHit : *simhith) {
+          simhitsflat.push_back(&simHit);
+        }
+      }
+      
+      auto simhitcompare = [&](const PSimHit *hit0, const PSimHit *hit1) {
+        return globalGeometry->idToDet(hit0->detUnitId())->surface().toGlobal(hit0->localPosition()).mag() < globalGeometry->idToDet(hit1->detUnitId())->surface().toGlobal(hit1->localPosition()).mag();
+      };
+      
+      std::sort(simhitsflat.begin(), simhitsflat.end(), simhitcompare);
+      
+      unsigned int ihit = 0;
+      for (auto const& simHitp : simhitsflat) {
+          auto const &simHit = *simHitp;
+          if (std::abs(simHit.particleType()) != 13) {
+            continue;
+          }
+          
+//           if (std::abs(simHit.localPosition().z()) > 1e-9) {
+//             continue;
+//           }
+          
+//       for (auto const& simhith : simHits) {
+//         for (const PSimHit& simHit : *simhith) {
           
           const GeomDet *detectorG = globalGeometry->idToDet(simHit.detUnitId());
           
@@ -435,6 +466,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           simtestrho = detectorG->surface().position().perp();
           
 
+          GlobalPoint refglobal;
+          
           auto const simhitglobal = detectorG->surface().toGlobal(Point3DBase<double, LocalTag>(simHit.localPosition().x(),
                                                                                                 simHit.localPosition().y(),
                                                                                                 simHit.localPosition().z()));
@@ -502,26 +535,35 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             const double pmag = P.norm();
             P = pmag*T;
             
+            refglobal = GlobalPoint(M[0], M[1], M[2]);
             reflocal = detectorG->surface().toLocal(Point3DBase<double, GlobalTag>(M[0], M[1], M[2]));
             simtestzlocalref = reflocal.z();
             
             const Vector3d xhat = Vector3d(0.,0.,1.).cross(M).normalized();
             
+//             const LocalVector localxhat = LocalVector(1.,0.,0.);
+//             const GlobalVector globalxhat = detectorG->surface().toGlobal(localxhat);
+//             const Vector3d xhat(globalxhat.x(), globalxhat.y(), globalxhat.z());
+            
             const double dx = xhat.dot(Msim-M);
             const double dxrec = xhat.dot(Mprop - Msim);
             
-            const Vector3d yhat = Vector3d(0.,0.,1.);
+            const Vector3d yhat = Vector3d(0.,0.,1.).cross(xhat).normalized();
             
             const double dy = yhat.dot(Msim-M);
             const double dyrec = yhat.dot(Mprop - Msim);
             
             simtestdx = dx;
-  //           simtestdxrec = dxrec;
+//             simtestdxrec = dxrec;
             simtestdxrec = proplocal.x() - simHit.localPosition().x();
+            simtestdxprop = xhat.dot(Mprop-M);
             
             simtestdy = dy;
+//             simtestdyrec = dyrec;
             simtestdyrec = proplocal.y() - simHit.localPosition().y();
+            simtestdyprop = yhat.dot(Mprop-M);
             
+            simtestdetid = detectorG->geographicalId().rawId();
             
             if (idealdisk) {
               break;
@@ -558,10 +600,36 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           std::cout << "local z to global: " << detectorG->surface().toGlobal(LocalVector(0.,0.,1.)) << std::endl;
           std::cout << "ref      : " << reflocal << std::endl;
           std::cout << "proplocal: " << proplocal << std::endl;
+          std::cout << "simlocal: " << simlocal << std::endl;
+          std::cout << "sim entry point: " << simHit.entryPoint() << std::endl;
+          std::cout << "sim exit point: " << simHit.exitPoint() << std::endl;
+          std::cout << "refglobal: " << refglobal << std::endl;
+          std::cout << "propglobal: " << propglobal << std::endl;
+          std::cout << "simglobal: " << simhitglobal << std::endl;
           std::cout << "sim-ref : " << simlocal - reflocal << std::endl;
+          std::cout << "sim-ref (global): " << simhitglobal - refglobal << std::endl;
           std::cout << "prop-ref: " << proplocal - reflocal << std::endl;
           std::cout << "sim-prop: " << simlocal - proplocal << std::endl;
+          std::cout << "sim-prop (global): " << simhitglobal - propglobal << std::endl;
           
+          
+          std::cout << "simtestdx: " << simtestdx << std::endl;
+          std::cout << "simtestdy: " << simtestdy << std::endl;
+          
+          std::cout << "simtestdxrec: " << simtestdxrec << std::endl;
+          std::cout << "simtestdyrec: " << simtestdyrec << std::endl;
+          
+          std::cout << "simtestdxprop: " << simtestdxprop << std::endl;
+          std::cout << "simtestdyprop: " << simtestdyprop << std::endl;
+          
+//           assert(std::abs(simtestdy)<0.1e-4);
+          
+//           assert(simHit.entryPoint().z()*simHit.exitPoint().z() < 0.);
+          
+//           assert(std::abs(simlocal.z())<1e-4);
+          
+//           assert(std::abs(simtestdxrec) < 40e-4);
+//           assert(simtestdxprop > -950e-4);
           
           ++ihit;
           
@@ -575,7 +643,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   //           simvalid = true;
   //           break;
   //         }
-        }
+//         }
       }
       
       
@@ -738,19 +806,71 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //             }
           }
           else {
-//             assert(tkhit->cluster_strip().isNonnull());
-//             const SiStripCluster& cluster = *tkhit->cluster_strip();
+            assert(tkhit->cluster_strip().isNonnull());
+            const SiStripCluster& cluster = *tkhit->cluster_strip();
+            const StripTopology* striptopology = dynamic_cast<const StripTopology*>(&(detectorG->topology()));
+            assert(striptopology);
+            
+            const uint16_t firstStrip = cluster.firstStrip();
+            const uint16_t lastStrip = cluster.firstStrip() + cluster.amplitudes().size() - 1;
+            const bool isOnEdge = firstStrip == 0 || lastStrip == (striptopology->nstrips() - 1);
+            
+//             if (isOnEdge) {
+//               std::cout << "strip hit isOnEdge" << std::endl;
+//             }
+            
+//             hitquality = !isOnEdge;
+            hitquality = true;
+            
+            
+            
+            
 //             SiStripClusterInfo clusterInfo = SiStripClusterInfo(cluster, iSetup, (*it)->geographicalId().rawId());
 //             if (clusterInfo.signalOverNoise() > 12.) {
 //               hitquality = true;
 //             }
-            hitquality = true;
+//             hitquality = true;
           }
           
         }
         else {
           hitquality = true;
         }
+        
+//         std::cout << "detid: " << (*it)->geographicalId().rawId() << std::endl;
+        
+        bool foundsim = false;
+        for (auto const& simhith : simHits) {
+          for (const PSimHit& simHit : *simhith) {
+            if (std::abs(simHit.particleType()) == 13 && simHit.detUnitId() == (*it)->geographicalId()) {
+              foundsim = true;
+              break;
+            }
+          }
+          if (foundsim) {
+            break;
+          }
+        }
+        
+        if (!foundsim) {
+          hitquality = false;
+        }
+        
+//         for (auto const& simhith : simHits) {
+//           for (const PSimHit& simHit : *simhith) {
+//             if (simHit.detUnitId() == (*it)->geographicalId()) {
+// //               std::cout << "particle type: " << simHit.particleType() << std::endl;
+// //               std::cout << "track id: " << simHit.trackId() << std::endl;
+// //               std::cout << "entry point: " << simHit.entryPoint() << std::endl;
+// //               std::cout << "exit point: " << simHit.exitPoint() << std::endl;
+// //               std::cout << "local position: " << simHit.localPosition() << std::endl;
+//               if (std::abs(simHit.particleType()) == 13 && std::abs(simHit.localPosition().z()) > 1e-4) {
+//                 std::cout << "anomalous simhit!" << std::endl;
+//                 hitquality = false;
+//               }
+//             }
+//           }
+//         }
 
         
         if (hitquality) {
@@ -1029,8 +1149,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     FreeTrajectoryState refFts;
     
-    if (dogen) {
-//     if (true) {
+//     if (dogen) {
+    if (true) {
+      
+      if (genpart==nullptr) {
+        continue;
+      }
       //init from gen state
       auto const& refpoint = genpart->vertex();
       auto const& trackmom = genpart->momentum();
@@ -2006,6 +2130,20 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             //TODO add hit validation stuff
             //TODO add simhit stuff
             
+//             const PSimHit *matchedsim = nullptr;
+//             for (auto const& simhith : simHits) {
+//               for (const PSimHit& simHit : *simhith) {
+//                 if (std::abs(simHit.particleType()) == 13 && simHit.detUnitId() == preciseHit->geographicalId()) {
+//                   matchedsim = &simHit;
+//                   break;
+//                 }
+//               }
+//               if (matchedsim) {
+//                 break;
+//               }
+//             }
+            
+            
             Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
 
             Matrix<AlignScalar, 2, 1> dy0;
@@ -2014,6 +2152,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //             Matrix<AlignScalar, 2, 2> R;
             Matrix2d R;
             if (preciseHit->dimension() == 1) {
+//               dy0[0] = AlignScalar(matchedsim->localPosition().x() - updtsos.localPosition().x());
               dy0[0] = AlignScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
               dy0[1] = AlignScalar(0.);
               
@@ -2046,6 +2185,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                     preciseHit->localPositionError().xy(), preciseHit->localPositionError().yy();
               if (ispixel) {
                 //take 2d hit as-is for pixels
+//                 dy0[0] = AlignScalar(matchedsim->localPosition().x() - updtsos.localPosition().x());
+//                 dy0[1] = AlignScalar(matchedsim->localPosition().y() - updtsos.localPosition().y());
                 dy0[0] = AlignScalar(preciseHit->localPosition().x() - updtsos.localPosition().x());
                 dy0[1] = AlignScalar(preciseHit->localPosition().y() - updtsos.localPosition().y());
               
@@ -2109,6 +2250,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 }
                 
                 Matrix<double, 2, 1> dy0local;
+//                 dy0local[0] = matchedsim->localPosition().x() - updtsos.localPosition().x();
+//                 dy0local[1] = matchedsim->localPosition().y() - updtsos.localPosition().y();
                 dy0local[0] = preciseHit->localPosition().x() - updtsos.localPosition().x();
                 dy0local[1] = preciseHit->localPosition().y() - updtsos.localPosition().y();
                 
@@ -2344,7 +2487,20 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               bool simvalid = false;
               for (auto const& simhith : simHits) {
                 for (const PSimHit& simHit : *simhith) {
-                  if (simHit.detUnitId() == preciseHit->geographicalId()) {                      
+                  if (simHit.detUnitId() == preciseHit->geographicalId()) {
+//                     std::cout << "entry point: " << simHit.entryPoint() << std::endl;
+//                     std::cout << "exit point: " << simHit.exitPoint() << std::endl;
+//                     std::cout << "local position: " << simHit.localPosition() << std::endl;
+//                     std::cout << "particle type: " << simHit.particleType() << std::endl;
+//                     std::cout << "trackId: " << simHit.trackId() << std::endl;
+//                     
+// //                     if (simHit.entryPoint().z() * simHit.exitPoint().z() >=0.) {
+//                     if (std::abs(simHit.localPosition().z()) > 1e-4) {
+//                       std::cout << "anomalous simhit!" << std::endl;
+//                     }
+                    
+//                     assert(simHit.entryPoint().z() * simHit.exitPoint().z() < 0.);
+                    
                     Vector2d dysimgenlocal;
                     dysimgenlocal << simHit.localPosition().x() - updtsos.localPosition().x(),
                                     simHit.localPosition().y() - updtsos.localPosition().y();
@@ -2575,7 +2731,32 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     const Vector5d dxRef = dxfull.head<5>();
 //     const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
 
-
+//     std::cout << "dchisqdparms.head<6>()" << std::endl;
+//     std::cout << dchisqdparms.head<6>() << std::endl;
+//     
+//     std::cout << "grad.head<6>()" << std::endl;
+//     std::cout << grad.head<6>() << std::endl;
+//     
+//     std::cout << "d2chisqdparms2.topLeftCorner<6, 6>():" << std::endl;
+//     std::cout << d2chisqdparms2.topLeftCorner<6, 6>() << std::endl;
+//     std::cout << "hess.topLeftCorner<6, 6>():" << std::endl;
+//     std::cout << hess.topLeftCorner<6, 6>() << std::endl;
+//     
+//     std::cout << "dchisqdparms.segment<6>(nparsBfield+nparsEloss)" << std::endl;
+//     std::cout << dchisqdparms.segment<6>(nparsBfield+nparsEloss) << std::endl;
+//     
+//     std::cout << "grad.segment<6>(nparsBfield+nparsEloss)" << std::endl;
+//     std::cout << grad.segment<6>(nparsBfield+nparsEloss) << std::endl;
+//     
+//     std::cout << "d2chisqdparms2.block<6, 6>(nparsBfield+nparsEloss, nparsBfield+nparsEloss):" << std::endl;
+//     std::cout << d2chisqdparms2.block<6, 6>(nparsBfield+nparsEloss, nparsBfield+nparsEloss) << std::endl;
+//     std::cout << "hess.block<6, 6>(nparsBfield+nparsEloss, nparsBfield+nparsEloss):" << std::endl;
+//     std::cout << hess.block<6, 6>(nparsBfield+nparsEloss, nparsBfield+nparsEloss) << std::endl;
+//     
+//     std::cout << "d2chisqdparms2.bottomRightCorner<6, 6>():" << std::endl;
+//     std::cout << d2chisqdparms2.bottomRightCorner<6, 6>() << std::endl;
+//     std::cout << "hess.bottomRightCorner<6, 6>():" << std::endl;
+//     std::cout << hess.bottomRightCorner<6, 6>() << std::endl;
     
     gradv.clear();
     jacrefv.clear();

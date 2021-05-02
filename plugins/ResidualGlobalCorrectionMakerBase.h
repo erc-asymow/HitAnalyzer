@@ -211,6 +211,11 @@ protected:
                                                              const double& s,
                                                              const GlobalVector& bfield) const;
                                                              
+Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParameters& globalSource,
+                                                             const GlobalTrajectoryParameters& globalDest,
+                                                             const double& s,
+                                                             const GlobalVector& bfield) const;
+                                                             
   AlgebraicVector5 localMSConvolution(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const;
                                                              
   Matrix<double, 5, 6> materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
@@ -387,6 +392,9 @@ protected:
   float simtestdxrec;
   float simtestdy;
   float simtestdyrec;
+  float simtestdxprop;
+  float simtestdyprop;
+  unsigned int simtestdetid;
   
   std::vector<float> rx;
   std::vector<float> ry;
