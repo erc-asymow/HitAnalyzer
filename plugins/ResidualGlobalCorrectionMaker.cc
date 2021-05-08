@@ -839,22 +839,22 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
 //         std::cout << "detid: " << (*it)->geographicalId().rawId() << std::endl;
         
-        bool foundsim = false;
-        for (auto const& simhith : simHits) {
-          for (const PSimHit& simHit : *simhith) {
-            if (std::abs(simHit.particleType()) == 13 && simHit.detUnitId() == (*it)->geographicalId()) {
-              foundsim = true;
-              break;
-            }
-          }
-          if (foundsim) {
-            break;
-          }
-        }
-        
-        if (!foundsim) {
-          hitquality = false;
-        }
+//         bool foundsim = false;
+//         for (auto const& simhith : simHits) {
+//           for (const PSimHit& simHit : *simhith) {
+//             if (std::abs(simHit.particleType()) == 13 && simHit.detUnitId() == (*it)->geographicalId()) {
+//               foundsim = true;
+//               break;
+//             }
+//           }
+//           if (foundsim) {
+//             break;
+//           }
+//         }
+//         
+//         if (!foundsim) {
+//           hitquality = false;
+//         }
         
 //         for (auto const& simhith : simHits) {
 //           for (const PSimHit& simHit : *simhith) {
@@ -953,7 +953,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     const unsigned int nparmsfull = nstateparms + npars;
     
     
-    const unsigned int nstateparmspost = 5*nhits;
+    const unsigned int nstateparmspost = 5*(nhits+1);
     
 //     std::cout << "nhits " << nhits << std::endl;
 //     std::cout << "nstateparms " << nstateparms << std::endl;
@@ -1149,8 +1149,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     FreeTrajectoryState refFts;
     
-//     if (dogen) {
-    if (true) {
+    if (dogen) {
+//     if (true) {
       
       if (genpart==nullptr) {
         continue;
@@ -1232,7 +1232,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     unsigned int elossidx = 0;
     
 //     constexpr unsigned int niters = 2;
-    constexpr unsigned int niters = 1;
+//     constexpr unsigned int niters = 1;
+    constexpr unsigned int niters = 10;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {
@@ -1359,7 +1360,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
         const GlobalPoint pos(globupd[0], globupd[1], globupd[2]);
         const GlobalVector mom(globupd[3], globupd[4], globupd[5]);
-        double charge = std::copysign(1., refFts.charge()/refFts.momentum().mag() + dxlocal[0]);
+        const double charge = std::copysign(1., refFts.charge()/refFts.momentum().mag() + dxlocal[0]);
 //         std::cout << "before update: reffts:" << std::endl;
 //         std::cout << refFts.parameters().vector() << std::endl;
 //         std::cout << "charge " << refFts.charge() << std::endl;
@@ -1540,6 +1541,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
         //energy loss jacobian
         const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
+        
+//         const Matrix<double, 5, 6> EdEVar = materialEffectsJacobianVar(updtsos, fPropagator->materialEffectsUpdator());
+//         
+//         std::cout << "EdE:" << std::endl;
+//         std::cout << EdE << std::endl;
+//         std::cout << "EdEVar:" << std::endl;
+//         std::cout << EdEVar << std::endl;
        
         //process noise jacobians
         const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
@@ -1598,7 +1606,39 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //         std::cout<< Q << std::endl;
         
 
-        // FIXME this is not valid for multiple iterations
+        // update state from previous iteration
+        //momentum kink residual
+        AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
+        if (iiter==0) {
+          layerStates.push_back(updtsos);
+        }
+        else {          
+          //current state from previous state on this layer
+          //save current parameters          
+          TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
+          
+          JacobianCurvilinearToLocal curv2localold(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
+          const AlgebraicMatrix55& curv2localjacold = curv2localold.jacobian();
+          const Matrix<double, 5, 5> Hold = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacold.Array()); 
+          
+          const AlgebraicVector5 local = oldtsos.localParameters().vector();
+          auto const& dxlocal = Hold*dxstate.segment<5>(5*(ihit+1));
+          const Matrix<double, 5, 1> localupd = Map<const Matrix<double, 5, 1>>(local.Array()) + dxlocal;
+          AlgebraicVector5 localvecupd(localupd[0],localupd[1],localupd[2],localupd[3],localupd[4]);
+          
+          idx0 = localvecupd - updtsos.localParameters().vector();
+          
+          const LocalTrajectoryParameters localparms(localvecupd, oldtsos.localParameters().pzSign());
+          
+//           std::cout << "before update: oldtsos:" << std::endl;
+//           std::cout << oldtsos.localParameters().vector() << std::endl;
+          oldtsos.update(localparms, oldtsos.surface(), field, oldtsos.surfaceSide());
+//           std::cout << "after update: oldtsos:" << std::endl;
+//           std::cout << oldtsos.localParameters().vector() << std::endl;
+          updtsos = oldtsos;
+
+        }
+        
         // curvilinear to local jacobian
         JacobianCurvilinearToLocal curv2localp(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
         const AlgebraicMatrix55& curv2localjacp = curv2localp.jacobian();
@@ -1612,35 +1652,6 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         if (ihit < (nhits-1)) {
 
           //momentum kink residual
-          AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
-          if (iiter==0) {
-            layerStates.push_back(updtsos);
-          }
-          else {
-            //FIXME this is not valid for the updated parameterization
-            
-            //current state from previous state on this layer
-            //save current parameters          
-            TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
-            
-            const AlgebraicVector5 local = oldtsos.localParameters().vector();
-            auto const& dxlocal = dxstate.segment<5>(5*(ihit+1));
-            const Matrix<double, 5, 1> localupd = Map<const Matrix<double, 5, 1>>(local.Array()) + dxlocal;
-            AlgebraicVector5 localvecupd(localupd[0],localupd[1],localupd[2],localupd[3],localupd[4]);
-            
-            idx0 = localvecupd - updtsos.localParameters().vector();
-            
-            const LocalTrajectoryParameters localparms(localvecupd, oldtsos.localParameters().pzSign());
-            
-  //           std::cout << "before update: oldtsos:" << std::endl;
-  //           std::cout << oldtsos.localParameters().vector() << std::endl;
-            oldtsos.update(localparms, oldtsos.surface(), field, oldtsos.surfaceSide());
-  //           std::cout << "after update: oldtsos:" << std::endl;
-  //           std::cout << oldtsos.localParameters().vector() << std::endl;
-            updtsos = oldtsos;
-
-          }
-          
           const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
           
 
@@ -1688,9 +1699,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             statejac(jacstateidxout + 3, jacstateidxin) = 1.;
             // ylocal_i
             statejac(jacstateidxout + 4, jacstateidxin + 1) = 1.;
-            
-            
-            
+
 //             std::cout << "FdFm" << std::endl;
 //             std::cout << FdFm << std::endl;
 //             std::cout << "FdFp" << std::endl;
@@ -2099,6 +2108,37 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           
         }
         else {
+          
+          // special case for last hit, assume zero scattering angle and nominal energy loss on last layer
+          Matrix<double, 2, 2> J = FdFm.block<2, 2>(3, 3);
+          // (du/dalphap)^-1
+          Matrix<double, 2, 2> Sinv = FdFm.block<2, 2>(3, 1).inverse();
+          // du/dqopp
+          Matrix<double, 2, 1> D = FdFm.block<2, 1>(3, 0);
+          // du/dBp
+          Matrix<double, 2, 1> Bstate = FdFm.block<2, 1>(3, 5);
+          
+          const unsigned int jacstateidxout = 5*(ihit+1);
+          const unsigned int jacstateidxin = 3*(ihit+1);
+          
+          // qop_i
+          //FIXME this should account for the energy loss, but only needed for outer momentum estimate which is not currently used
+          statejac(jacstateidxout, jacstateidxin - 1) = 1.;
+          
+          // dalpha_i/dqop_i
+          statejac.block<2, 1>(jacstateidxout + 1, jacstateidxin - 1) = -Sinv*D;
+          // dalpha_i/du_i
+          statejac.block<2, 2>(jacstateidxout + 1, jacstateidxin) = -Sinv*J;
+          // dalpha_i/du_(i-1)
+          statejac.block<2, 2>(jacstateidxout + 1, jacstateidxin - 3) = Sinv;
+          // d(lambda, phi) / dbeta
+          statejac.block<2, 1>(jacstateidxout + 1, nstateparms + parmidx) = -Sinv*Bstate;
+          // xlocal_i
+          statejac(jacstateidxout + 3, jacstateidxin) = 1.;
+          // ylocal_i
+          statejac(jacstateidxout + 4, jacstateidxin + 1) = 1.;
+
+          
           const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6,preciseHit->geographicalId()));
           globalidxv[parmidx] = bfieldglobalidx;
           parmidx++; 
@@ -2638,6 +2678,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       dxstate = statejac.leftCols(nstateparms)*dxfull;
       
+      const Matrix<double, 1, 1> deltachisq = dchisqdx.transpose()*dxfull + 0.5*dxfull.transpose()*d2chisqdx2*dxfull;
+      
+//       std::cout << "iiter = " << iiter << ", deltachisq = " << deltachisq[0] << std::endl;
+      
 //       const Vector5d dxRef = dx.head<5>();
 // //       const Vector5d dxRef = -Cinvd.solve(dchisqdx).head<5>();
 //       const Matrix5d Cinner = Cinvd.solve(MatrixXd::Identity(nstateparms,nstateparms)).topLeftCorner<5,5>();
@@ -2675,6 +2719,14 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         refParms_iter0 = refParms;
         refCov_iter0 = refCov;
       }
+      
+      niter = iiter + 1;
+      edmval = -deltachisq[0];
+      
+      if (iiter > 1 && std::abs(deltachisq[0])<1e-3) {
+        break;
+      }
+      
 //       else if (iiter==2) {
 //         refParms_iter2 = refParms;
 //         refCov_iter2 = refCov;        

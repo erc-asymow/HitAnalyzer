@@ -357,9 +357,9 @@ void ResidualGlobalCorrectionMakerSim::analyze(const edm::Event &iEvent, const e
   for (auto const& simhith : simHits) {
     for (const PSimHit& simHit : *simhith) {
       if (std::abs(simHit.particleType()) == 13) {
-        if (std::abs(simHit.localPosition().z()) > 1e-9) {
-          continue;
-        }
+//         if (std::abs(simHit.localPosition().z()) > 1e-9) {
+//           continue;
+//         }
         hits.push_back(&simHit);
       }
     }
@@ -767,7 +767,8 @@ void ResidualGlobalCorrectionMakerSim::analyze(const edm::Event &iEvent, const e
 //       AlgebraicSymMatrix55 nullerr;
 //       const CurvilinearTrajectoryError referr(nullerr);
       
-      refFts = FreeTrajectoryState(refpos, 0.98*refmom, genpart->charge(), field);
+      refFts = FreeTrajectoryState(refpos, refmom, genpart->charge(), field);
+//       refFts = FreeTrajectoryState(refpos, 0.98*refmom, genpart->charge(), field);
 //       refFts = FreeTrajectoryState(refglobal, referr);
     }
     else {
@@ -813,8 +814,8 @@ void ResidualGlobalCorrectionMakerSim::analyze(const edm::Event &iEvent, const e
 //     unsigned int bfieldidx = 0;
 //     unsigned int elossidx = 0;
     
-//     constexpr unsigned int niters = 2;
-    constexpr unsigned int niters = 3;
+    constexpr unsigned int niters = 1;
+//     constexpr unsigned int niters = 3;
     
     for (unsigned int iiter=0; iiter<niters; ++iiter) {
       if (debugprintout_) {

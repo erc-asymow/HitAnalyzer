@@ -220,6 +220,8 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
                                                              
   Matrix<double, 5, 6> materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
   
+  Matrix<double, 5, 6> materialEffectsJacobianVar(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator);
+  
   std::array<Matrix<double, 5, 5>, 5> processNoiseJacobians(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) const;
   
   Matrix<double, 2, 1> localPositionConvolution(const TrajectoryStateOnSurface& tsos) const;
@@ -401,6 +403,9 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
   std::vector<float> deigx;
   std::vector<float> deigy;
+  
+  float edmval;
+  unsigned int niter;
   
 //   bool filledRunTree_;
   
