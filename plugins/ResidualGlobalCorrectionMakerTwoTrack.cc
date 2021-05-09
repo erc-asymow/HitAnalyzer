@@ -628,8 +628,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
             const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
             
             //energy loss jacobian
-//             const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
-            const Matrix<double, 5, 6> EdE = materialEffectsJacobianVar(updtsos, fPropagator->materialEffectsUpdator());
+            const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
+//             const Matrix<double, 5, 6> EdE = materialEffectsJacobianVar(updtsos, fPropagator->materialEffectsUpdator());
           
             const double xival = updtsos.surface().mediumProperties().xi();
             
