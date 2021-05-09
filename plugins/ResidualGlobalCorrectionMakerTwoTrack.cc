@@ -93,9 +93,6 @@ private:
   std::vector<float> Muplus_jacRef;
   std::vector<float> Muminus_jacRef;
   
-  float chisqval;
-  unsigned int ndof;
-  
   unsigned int Muplus_nhits;
   unsigned int Muplus_nvalid;
   unsigned int Muplus_nvalidpixel;
@@ -174,9 +171,6 @@ void ResidualGlobalCorrectionMakerTwoTrack::beginStream(edm::StreamID streamid)
     
     tree->Branch("Muplus_jacRef", &Muplus_jacRef);
     tree->Branch("Muminus_jacRef", &Muminus_jacRef);
-    
-    tree->Branch("chisqval", &chisqval);
-    tree->Branch("ndof", &ndof);
     
     tree->Branch("Muplus_nhits", &Muplus_nhits);
     tree->Branch("Muplus_nvalid", &Muplus_nvalid);
@@ -293,15 +287,15 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
           }
         }
         
-        if (mu0gen != nullptr && mu1gen != nullptr) {
-          auto const jpsigen = ROOT::Math::PtEtaPhiMVector(mu0gen->pt(), mu0gen->eta(), mu0gen->phi(), mmu) +
-                            ROOT::Math::PtEtaPhiMVector(mu1gen->pt(), mu1gen->eta(), mu1gen->phi(), mmu);
-
-          massconstraintval = jpsigen.mass();
-        }
-        else {
-          continue;
-        }
+//         if (mu0gen != nullptr && mu1gen != nullptr) {
+//           auto const jpsigen = ROOT::Math::PtEtaPhiMVector(mu0gen->pt(), mu0gen->eta(), mu0gen->phi(), mmu) +
+//                             ROOT::Math::PtEtaPhiMVector(mu1gen->pt(), mu1gen->eta(), mu1gen->phi(), mmu);
+// 
+//           massconstraintval = jpsigen.mass();
+//         }
+//         else {
+//           continue;
+//         }
         
       }
       
@@ -634,7 +628,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
             const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
             
             //energy loss jacobian
-            const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
+//             const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
+            const Matrix<double, 5, 6> EdE = materialEffectsJacobianVar(updtsos, fPropagator->materialEffectsUpdator());
           
             const double xival = updtsos.surface().mediumProperties().xi();
             
@@ -1750,11 +1745,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         auto const& d2chisqdxdparms = hessfull.topRightCorner(nstateparms, npars);
         auto const& d2chisqdparms2 = hessfull.bottomRightCorner(npars, npars);
         
-  //       SelfAdjointEigenSolver<MatrixXd> es(d2chisqdx2, EigenvaluesOnly);
-  //       const double condition = es.eigenvalues()[nstateparms-1]/es.eigenvalues()[0];
-  //       std::cout << "eigenvalues:" << std::endl;
-  //       std::cout << es.eigenvalues().transpose() << std::endl;
-  //       std::cout << "condition: " << condition << std::endl;
+
         
         Cinvd.compute(d2chisqdx2);
         
@@ -1780,6 +1771,12 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         const Matrix<double, 1, 1> deltachisq = dchisqdx.transpose()*dxfull + 0.5*dxfull.transpose()*d2chisqdx2*dxfull;
         
 //         std::cout << "iiter = " << iiter << ", deltachisq = " << deltachisq[0] << std::endl;
+//         
+//         SelfAdjointEigenSolver<MatrixXd> es(d2chisqdx2, EigenvaluesOnly);
+//         const double condition = es.eigenvalues()[nstateparms-1]/es.eigenvalues()[0];
+//         std::cout << "eigenvalues:" << std::endl;
+//         std::cout << es.eigenvalues().transpose() << std::endl;
+//         std::cout << "condition: " << condition << std::endl;
         
         chisqval = chisq0val + deltachisq[0];
         
@@ -2079,6 +2076,26 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
   //     hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
       hess = d2chisqdparms2 + dxdparms*d2chisqdxdparms;
   
+      for (unsigned int iparm = 0; iparm < npars; ++iparm) {
+        if (detidparmsrev[globalidxv[iparm]].first != 7) {
+          hess.row(iparm) *= 0.;
+          hess.col(iparm) *= 0.;
+          hess(iparm, iparm) = 1e6;
+        }
+      }
+      
+//       SelfAdjointEigenSolver<MatrixXd> es(hess, EigenvaluesOnly);
+//       const double condition = es.eigenvalues()[nstateparms-1]/es.eigenvalues()[0];
+//       std::cout << "hess eigenvalues:" << std::endl;
+//       std::cout << es.eigenvalues().transpose() << std::endl;
+//       std::cout << "condition: " << condition << std::endl;
+      
+//       std::cout << "hess diagonal:" << std::endl;
+//       std::cout << hess.diagonal().transpose() << std::endl;
+//       
+//       assert(es.eigenvalues()[0] > -1e-5);
+//       assert(hess.diagonal().minCoeff() > 0.);
+      
       nParms = npars;
 
       gradv.clear();

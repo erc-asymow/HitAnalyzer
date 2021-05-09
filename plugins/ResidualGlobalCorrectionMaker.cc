@@ -1,4 +1,5 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
+#include "DataFormats/MuonReco/interface/Muon.h"
 
 class ResidualGlobalCorrectionMaker : public ResidualGlobalCorrectionMakerBase
 {
@@ -13,12 +14,27 @@ private:
   virtual void beginStream(edm::StreamID) override;
   virtual void analyze(const edm::Event &, const edm::EventSetup &) override;
 
+  edm::EDGetTokenT<edm::Association<reco::TrackExtraCollection>> inputAssoc_;
+  
+  float muonPt;
+  bool muonLoose;
+  bool muonMedium;
+  bool muonTight;
+  bool muonIsPF;
+  bool muonIsTracker;
+  bool muonIsGlobal;
+  bool muonIsStandalone;
+  bool muonInnerTrackBest;
+  
+  bool trackExtraAssoc;
   
 };
 
 
 ResidualGlobalCorrectionMaker::ResidualGlobalCorrectionMaker(const edm::ParameterSet &iConfig) : ResidualGlobalCorrectionMakerBase(iConfig) 
 {
+  
+  inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
   
 }
 
@@ -138,6 +154,21 @@ void ResidualGlobalCorrectionMaker::beginStream(edm::StreamID streamid)
     tree->Branch("deigx", &deigx);
     tree->Branch("deigy", &deigy);
     
+    tree->Branch("muonPt", &muonPt);
+    tree->Branch("muonLoose", &muonLoose);
+    tree->Branch("muonMedium", &muonMedium);
+    tree->Branch("muonTight", &muonTight);
+    
+    tree->Branch("muonIsPF", &muonIsPF);
+    tree->Branch("muonIsTracker", &muonIsTracker);
+    tree->Branch("muonIsGlobal", &muonIsGlobal);
+    tree->Branch("muonIsStandalone", &muonIsStandalone);
+    
+    tree->Branch("muonInnerTrackBest", &muonInnerTrackBest);
+    
+    tree->Branch("trackExtraAssoc", &trackExtraAssoc);
+    
+    
     nJacRef = 0.;
   }
 }
@@ -237,6 +268,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       iEvent.getByToken(inputSimHits_[isimhit], simHits[isimhit]);
     }
   }
+  
+  Handle<reco::MuonCollection> muons;
+  if (doMuons_) {
+    iEvent.getByToken(inputMuons_, muons);
+  }
+  
+  Handle<edm::Association<reco::TrackExtraCollection>> assoc;
+  if (doMuons_) {
+    iEvent.getByToken(inputAssoc_, assoc);
+  }
+  
 //   if (doSim_) {
 //     iEvent.getByToken(inputSimHits_, tecSimHits);
 //   }
@@ -660,7 +702,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   lumi = iEvent.luminosityBlock();
   event = iEvent.id().event();
   
-  for (const reco::Track &track : *trackOrigH) {
+//   for (const reco::Track &track : *trackOrigH) {
+  for (unsigned int itrack = 0; itrack < trackOrigH->size(); ++itrack) {
+    const reco::Track &track = (*trackOrigH)[itrack];
+    const reco::TrackRef trackref(trackOrigH, itrack);
 //     const Trajectory& traj = (*trajH)[itraj];
     
 //     const edm::Ref<std::vector<Trajectory> > trajref(trajH, j);
@@ -751,6 +796,42 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         }
       }
     }
+    
+    
+    muonPt = -99.;
+    muonLoose = false;
+    muonMedium = false;
+    muonTight = false;
+    muonIsTracker = false;
+    muonIsGlobal = false;
+    muonIsStandalone = false;
+    muonInnerTrackBest = false;
+    trackExtraAssoc = false;
+
+    if (doMuons_) {
+      for (auto const &muon : *muons) {
+        if (muon.innerTrack() == trackref) {
+          muonPt = muon.pt();
+          muonLoose = muon.passed(reco::Muon::CutBasedIdLoose);
+          muonMedium = muon.passed(reco::Muon::CutBasedIdMedium);
+          muonTight = muon.passed(reco::Muon::CutBasedIdTight);
+          muonIsPF = muon.isPFMuon();
+          muonIsTracker = muon.isTrackerMuon();
+          muonIsGlobal = muon.isGlobalMuon();
+          muonIsStandalone = muon.isStandAloneMuon();
+          if (muon.muonBestTrack() == trackref) {
+            muonInnerTrackBest = true;
+          }
+        } 
+      }
+      if (assoc->contains(track.extra().id())) {
+        const reco::TrackExtraRef &trackextraref = (*assoc)[track.extra()];
+        if (trackextraref.isNonnull()) {
+          trackExtraAssoc = true;
+        }
+      }
+    }
+    
     
 
 //     PropagationDirection rpropdir = traj.direction();
@@ -1325,6 +1406,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         dhessv.resize(nhits-1);
       }
       
+      double chisq0val = 0.;
+      
       dxpxb1 = -99.;
       dypxb1 = -99.;
       dxttec9rphi = -99.;
@@ -1485,6 +1568,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const Matrix<BSScalar, 3, 1> dbs = dbs0 + jacpos*du;
         const BSScalar chisq = dbs.transpose()*covBSinv*dbs;
         
+        chisq0val += chisq.value().value();
+        
         auto const& gradlocal = chisq.value().derivatives();
         //fill local hessian
         Matrix<double, nlocal, nlocal> hesslocal;
@@ -1540,7 +1625,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
         
         //energy loss jacobian
-        const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
+//         const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
+        const Matrix<double, 5, 6> EdE = materialEffectsJacobianVar(updtsos, fPropagator->materialEffectsUpdator());
         
 //         const Matrix<double, 5, 6> EdEVar = materialEffectsJacobianVar(updtsos, fPropagator->materialEffectsUpdator());
 //         
@@ -1912,6 +1998,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               const MSScalar chisqeloss = deloss*invSigmaE*deloss;
               
               chisq = chisqms + chisqeloss;
+              
+              chisq0val += chisq.value().value();
             }
             else {
 //               islikelihood = true;
@@ -2419,6 +2507,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
             Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
             AlignScalar chisq = dh.transpose()*Vinv*dh;
+            
+            chisq0val += chisq.value().value();
 
             auto const& gradlocal = chisq.value().derivatives();
             //fill local hessian
@@ -2679,6 +2769,10 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       dxstate = statejac.leftCols(nstateparms)*dxfull;
       
       const Matrix<double, 1, 1> deltachisq = dchisqdx.transpose()*dxfull + 0.5*dxfull.transpose()*d2chisqdx2*dxfull;
+      
+      chisqval = chisq0val + deltachisq[0];
+        
+      ndof = 3*(nhits - 1) + nvalid + nvalidalign2d - nstateparms;
       
 //       std::cout << "iiter = " << iiter << ", deltachisq = " << deltachisq[0] << std::endl;
       

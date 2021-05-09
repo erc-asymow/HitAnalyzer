@@ -127,6 +127,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   doSim_ = iConfig.getParameter<bool>("doSim");
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
+  doMuons_ = iConfig.getParameter<bool>("doMuons");
 
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
@@ -148,6 +149,10 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     for (const std::string& label : labels) {
       inputSimHits_.push_back(consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits", label)));
     }
+  }
+  
+  if (doMuons_) {
+    inputMuons_ = consumes<reco::MuonCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
   }
   
   debugprintout_ = false;
@@ -216,6 +221,8 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     tree->Branch("edmval", &edmval);
     tree->Branch("niter", &niter);
     
+    tree->Branch("chisqval", &chisqval);
+    tree->Branch("ndof", &ndof);
     
     nParms = 0.;
 
@@ -282,6 +289,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   const MagneticField* field = thePropagator->magneticField();
   
   detidparms.clear();
+  detidparmsrev.clear();
   
   std::set<std::pair<int, DetId> > parmset;
   
@@ -457,6 +465,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     
     //fill map
     detidparms.emplace(key, globalidx);
+    detidparmsrev.emplace_back(key);
     globalidx++;
     
     runtree->Fill();

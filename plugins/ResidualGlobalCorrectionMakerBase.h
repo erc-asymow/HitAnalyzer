@@ -72,6 +72,7 @@
 #include "DataFormats/TrackerRecHit2D/interface/SiPixelRecHit.h"
 #include "RecoLocalTracker/SiStripClusterizer/interface/SiStripClusterInfo.h"
 
+#include "DataFormats/MuonReco/interface/MuonFwd.h"
 
 
 #include "FWCore/ServiceRegistry/interface/Service.h"
@@ -250,6 +251,8 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
 //   edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
   std::vector<edm::EDGetTokenT<std::vector<PSimHit>>> inputSimHits_;
+  
+  edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
 
 //   SiStripClusterInfo siStripClusterInfo_;
 
@@ -346,6 +349,7 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   std::vector<float> localy;
   
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
+  std::vector<std::pair<int, DetId>> detidparmsrev;
   
   unsigned int run;
   unsigned int lumi;
@@ -363,6 +367,7 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
   bool doGen_;
   bool doSim_;
+  bool doMuons_;
   
   bool bsConstraint_;
   
@@ -406,6 +411,9 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
   float edmval;
   unsigned int niter;
+  
+  float chisqval;
+  unsigned int ndof;
   
 //   bool filledRunTree_;
   
