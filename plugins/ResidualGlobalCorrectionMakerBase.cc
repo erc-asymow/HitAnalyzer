@@ -306,6 +306,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       const bool ispixel = GeomDetEnumerators::isTrackerPixel(det->subDetector());
       const bool isendcap = GeomDetEnumerators::isEndcap(det->subDetector());
 
+      const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
+      const bool isglued = gluedid != 0;
+      const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
       
 //       const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
 //       const bool isglued = gluedid != 0;
@@ -329,8 +332,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
         //local y alignment parameters only for pixels for now
         parmset.emplace(1, det->geographicalId());
       }
-      parmset.emplace(6, det->geographicalId());
-      parmset.emplace(7, det->geographicalId());
+      // bfield and material parameters are associated to glued detids where applicable
+      parmset.emplace(6, parmdetid);
+      parmset.emplace(7, parmdetid);
     }
   }
   

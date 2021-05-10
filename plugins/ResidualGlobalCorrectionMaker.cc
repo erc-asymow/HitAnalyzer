@@ -1595,6 +1595,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
 //         std::cout << "ihit " << ihit << std::endl;
         auto const& hit = hits[ihit];
+        
+        const uint32_t gluedid = trackerTopology->glued(hit->det()->geographicalId());
+        const bool isglued = gluedid != 0;
+        const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
+        const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : hit->det();
+        const double xifraction = isglued ? hit->det()->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
                 
         TrajectoryStateOnSurface updtsos = propresult.first;
         
@@ -1858,8 +1864,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             const MSScalar Eqop(EdE(0,0));
             const Matrix<MSScalar, 1, 2> Ealpha = EdE.block<1, 2>(0, 1).cast<MSScalar>();
-            const MSScalar dE(EdE(0,5));
-//             const MSScalar dE(xifraction*EdE(0,5));
+//             const MSScalar dE(EdE(0,5));
+            const MSScalar dE(xifraction*EdE(0,5));
 //             (void)EdE;
             
             const MSScalar muE(dxeloss[0]);
@@ -2182,11 +2188,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             hessfull.block<nlocalstate,nlocalparms>(fullstateidx, fullparmidx) += hesslocal.topRightCorner<nlocalstate, nlocalparms>();
             hessfull.block<nlocalparms, nlocalparms>(fullparmidx, fullparmidx) += hesslocal.bottomRightCorner<nlocalparms, nlocalparms>();
             
-            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6,preciseHit->geographicalId()));
+            const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));
             globalidxv[parmidx] = bfieldglobalidx;
             parmidx++;
             
-            const unsigned int elossglobalidx = detidparms.at(std::make_pair(7,preciseHit->geographicalId()));
+            const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
             globalidxv[parmidx] = elossglobalidx;
             parmidx++;
           }
@@ -2227,7 +2233,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           statejac(jacstateidxout + 4, jacstateidxin + 1) = 1.;
 
           
-          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6,preciseHit->geographicalId()));
+          const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));
           globalidxv[parmidx] = bfieldglobalidx;
           parmidx++; 
         }

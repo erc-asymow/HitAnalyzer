@@ -598,6 +598,12 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
           for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
     //         std::cout << "ihit " << ihit << std::endl;
             auto const& hit = hits[ihit];
+            
+            const uint32_t gluedid = trackerTopology->glued(hit->det()->geographicalId());
+            const bool isglued = gluedid != 0;
+            const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
+            const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : hit->det();
+            const double xifraction = isglued ? hit->det()->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
                     
             TrajectoryStateOnSurface updtsos = propresult.first;
             
@@ -831,7 +837,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 
                 const MSScalar Eqop(EdE(0,0));
                 const Matrix<MSScalar, 1, 2> Ealpha = EdE.block<1, 2>(0, 1).cast<MSScalar>();
-                const MSScalar dE(EdE(0,5));
+                const MSScalar dE(xifraction*EdE(0,5));
                 
                 const MSScalar muE(dxeloss[0]);
                 
@@ -953,15 +959,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 
                 
   //               std::cout << "first hit, parm idx = " << parmidx << std::endl;
-                
-                const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6,preciseHit->geographicalId()));
-                globalidxv[parmidx] = bfieldglobalidx;
-                parmidx++;
-                
-                const unsigned int elossglobalidx = detidparms.at(std::make_pair(7,preciseHit->geographicalId()));
-                globalidxv[parmidx] = elossglobalidx;
-                parmidx++;
-                
+                                
               }
               else {
                 //TODO statejac stuff
@@ -1004,7 +1002,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 
                 const MSScalar Eqop(EdE(0,0));
                 const Matrix<MSScalar, 1, 2> Ealpha = EdE.block<1, 2>(0, 1).cast<MSScalar>();
-                const MSScalar dE(EdE(0,5));
+                const MSScalar dE(xifraction*EdE(0,5));
                 
                 const MSScalar muE(dxeloss[0]);
                 
@@ -1107,16 +1105,15 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 
   //               std::cout << "intermediate hit, parm idx = " << parmidx << std::endl;
                 
-                const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6,preciseHit->geographicalId()));
-                globalidxv[parmidx] = bfieldglobalidx;
-                parmidx++;
-                
-                const unsigned int elossglobalidx = detidparms.at(std::make_pair(7,preciseHit->geographicalId()));
-                globalidxv[parmidx] = elossglobalidx;
-                parmidx++;
-                
-                
               }
+              
+              const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));
+              globalidxv[parmidx] = bfieldglobalidx;
+              parmidx++;
+              
+              const unsigned int elossglobalidx = detidparms.at(std::make_pair(7, parmdetid));
+              globalidxv[parmidx] = elossglobalidx;
+              parmidx++;
               
               //backwards propagation jacobian (local to local) to be used at the next layer
               FdFm = curv2curvTransportJacobian(*updtsos.freeState(), propresult, true);
@@ -1153,7 +1150,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
               // ylocal_i
               jac(jacstateidxout + 4, jacstateidxin + 1) = 1.;
               
-              const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6,preciseHit->geographicalId()));
+              const unsigned int bfieldglobalidx = detidparms.at(std::make_pair(6, parmdetid));
               globalidxv[parmidx] = bfieldglobalidx;
               parmidx++; 
             }
