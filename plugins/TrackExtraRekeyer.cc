@@ -27,8 +27,8 @@ private:
 TrackExtraRekeyer::TrackExtraRekeyer(const edm::ParameterSet &iConfig)
 
 {
-  inputTrack_ = consumes<reco::TrackCollection>(edm::InputTag("generalTracks"));
-  inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(edm::InputTag("muonReducedTrackExtras"));
+  inputTrack_ = consumes<reco::TrackCollection>(iConfig.getParameter<edm::InputTag>("src"));
+  inputAssoc_ = consumes<edm::Association<reco::TrackExtraCollection>>(iConfig.getParameter<edm::InputTag>("association"));
   
   outputTrack_ = produces<reco::TrackCollection>();
 }
