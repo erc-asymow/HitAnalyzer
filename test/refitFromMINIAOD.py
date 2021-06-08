@@ -69,36 +69,11 @@ process.myRefittedTracks.Fitter = 'FlexibleKFFittingSmoother'
                                          
 
 # Path and EndPath definitions
-#process.reconstruction_step = cms.Path(process.reconstruction_fromRECO)
-#process.reconstruction_step = cms.Path(process.globalCor*process.globalCorOut)
 process.reconstruction_step = cms.Path(process.tracksFromMuons*process.myRefittedTracks)
 process.endjob_step = cms.EndPath(process.endOfProcess)
 process.RECOSIMoutput_step = cms.EndPath(process.RECOSIMoutput)
 
 # Schedule definition
 process.schedule = cms.Schedule(process.reconstruction_step,process.endjob_step,process.RECOSIMoutput_step)
-#process.schedule = cms.Schedule(process.reconstruction_step)
-#from PhysicsTools.PatAlgos.tools.helpers import associatePatAlgosToolsTask
-#associatePatAlgosToolsTask(process)
 
-##Setup FWK for multithreaded
-##process.options.numberOfThreads=cms.untracked.uint32(2)
-##process.options.numberOfStreams=cms.untracked.uint32(0)
-##process.options.numberOfConcurrentLuminosityBlocks=cms.untracked.uint32(1)
-
-##do not add changes to your config after this point (unless you know what you are doing)
-#from FWCore.ParameterSet.Utilities import convertToUnscheduled
-#process=convertToUnscheduled(process)
-
-
-## Customisation from command line
-
-##Have logErrorHarvester wait for the same EDProducers to finish as those providing data for the OutputModule
-#from FWCore.Modules.logErrorHarvester_cff import customiseLogErrorHarvesterUsingOutputCommands
-#process = customiseLogErrorHarvesterUsingOutputCommands(process)
-
-## Add early deletion of temporary data products to reduce peak memory need
-#from Configuration.StandardSequences.earlyDeleteSettings_cff import customiseEarlyDelete
-#process = customiseEarlyDelete(process)
-## End adding early deletion
 
