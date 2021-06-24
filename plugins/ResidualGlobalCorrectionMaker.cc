@@ -1312,7 +1312,6 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //     unsigned int bfieldidx = 0;
 //     unsigned int elossidx = 0;
     
-//     constexpr unsigned int niters = 2;
 //     constexpr unsigned int niters = 1;
     constexpr unsigned int niters = 10;
     

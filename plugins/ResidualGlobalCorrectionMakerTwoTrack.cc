@@ -101,6 +101,8 @@ private:
   unsigned int Muminus_nvalid;
   unsigned int Muminus_nvalidpixel;
   
+//   std::vector<float> hessv;
+  
 
   
 };
@@ -180,6 +182,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::beginStream(edm::StreamID streamid)
     tree->Branch("Muminus_nvalid", &Muminus_nvalid);
     tree->Branch("Muminus_nvalidpixel", &Muminus_nvalidpixel);
   
+//     tree->Branch("hessv", &hessv);
     
   }
 }
@@ -477,6 +480,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       
       bool valid = true;
       
+//       constexpr unsigned int niters = 1;
       constexpr unsigned int niters = 10;
       
       for (unsigned int iiter=0; iiter<niters; ++iiter) {
@@ -2073,13 +2077,13 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
   //     hess = d2chisqdparms2 + 2.*dxdparms*d2chisqdxdparms + dxdparms*d2chisqdx2*dxdparms.transpose();
       hess = d2chisqdparms2 + dxdparms*d2chisqdxdparms;
   
-      for (unsigned int iparm = 0; iparm < npars; ++iparm) {
-        if (detidparmsrev[globalidxv[iparm]].first != 7) {
-          hess.row(iparm) *= 0.;
-          hess.col(iparm) *= 0.;
-          hess(iparm, iparm) = 1e6;
-        }
-      }
+//       for (unsigned int iparm = 0; iparm < npars; ++iparm) {
+//         if (detidparmsrev[globalidxv[iparm]].first != 7) {
+//           hess.row(iparm) *= 0.;
+//           hess.col(iparm) *= 0.;
+//           hess(iparm, iparm) = 1e6;
+//         }
+//       }
       
 //       SelfAdjointEigenSolver<MatrixXd> es(hess, EigenvaluesOnly);
 //       const double condition = es.eigenvalues()[nstateparms-1]/es.eigenvalues()[0];
@@ -2153,9 +2157,14 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         packedidx += segmentsize;
       }
 
+//       hessv.resize(npars*npars);
+//       Map<Matrix<float, Dynamic, Dynamic, RowMajor>>(hessv.data(), npars, npars) = hess.cast<float>();
+      
       if (fillTrackTree_) {
         tree->Fill();
       }
+      
+
       
 
       
