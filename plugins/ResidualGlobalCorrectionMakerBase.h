@@ -311,11 +311,11 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
   std::array<float, 5> genParms;
   
-  std::vector<float> gradv;
+  std::vector<double> gradv;
   std::vector<float> jacrefv;
   std::vector<unsigned int> globalidxv;
   
-  std::vector<float> hesspackedv;
+  std::vector<double> hesspackedv;
   
   std::vector<unsigned int> hitidxv;
   std::vector<float> dxrecgen;
