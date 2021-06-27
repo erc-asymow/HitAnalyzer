@@ -2107,11 +2107,9 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       }
       
       //eigen representation of the underlying vector storage
-//       Map<VectorXf> gradout(gradv.data(), npars);
-      Map<VectorXd> gradout(gradv.data(), npars);
+      Map<VectorXf> gradout(gradv.data(), npars);
 
-//       gradout = grad.cast<float>();
-      gradout = grad;
+      gradout = grad.cast<float>();
       
         
 
@@ -2149,15 +2147,13 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
         tree->SetBranchAddress("hesspackedv", hesspackedv.data());
       }
       
-//       Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
-      Map<VectorXd> hesspacked(hesspackedv.data(), nsym);
+      Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
       const Map<const VectorXu> globalidx(globalidxv.data(), npars);
 
       unsigned int packedidx = 0;
       for (unsigned int ipar = 0; ipar < npars; ++ipar) {
         const unsigned int segmentsize = npars - ipar;
-//         hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
-        hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize);
+        hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
         packedidx += segmentsize;
       }
 

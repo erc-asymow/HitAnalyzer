@@ -2924,15 +2924,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     }
     
     //eigen representation of the underlying vector storage
-//     Map<VectorXf> gradout(gradv.data(), npars);
-    Map<VectorXd> gradout(gradv.data(), npars);
+    Map<VectorXf> gradout(gradv.data(), npars);
     Map<Matrix<float, 5, Dynamic, RowMajor> > jacrefout(jacrefv.data(), 5, npars);
     
 //     jacrefout = dxdparms.leftCols<5>().transpose().cast<float>();    
     jacrefout = ( (dxdparms*statejac.leftCols(nstateparms).transpose()).leftCols<5>().transpose() + statejac.topRightCorner(5, npars) ).cast<float>();  
     
-//     gradout = grad.cast<float>();
-    gradout = grad;
+    gradout = grad.cast<float>();
     
     
     rx.resize(2*nvalid);
@@ -3071,15 +3069,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       tree->SetBranchAddress("hesspackedv", hesspackedv.data());
     }
     
-//     Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
-    Map<VectorXd> hesspacked(hesspackedv.data(), nsym);
+    Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
     const Map<const VectorXu> globalidx(globalidxv.data(), npars);
 
     unsigned int packedidx = 0;
     for (unsigned int ipar = 0; ipar < npars; ++ipar) {
       const unsigned int segmentsize = npars - ipar;
-//       hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
-      hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize);
+      hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
       packedidx += segmentsize;
     }
 
