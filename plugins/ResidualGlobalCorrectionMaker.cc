@@ -1,4 +1,5 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
+#include "MagneticFieldOffset.h"
 #include "DataFormats/MuonReco/interface/Muon.h"
 
 class ResidualGlobalCorrectionMaker : public ResidualGlobalCorrectionMakerBase
@@ -227,15 +228,23 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
   edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
   iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
   
-  ESHandle<Propagator> thePropagator;
-  iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
+//   ESHandle<Propagator> thePropagator;
+//   iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
 //   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", thePropagator);
 //   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterialParabolicMf", thePropagator);
 //   iSetup.get<TrackingComponentsRecord>().get("Geant4ePropagator", thePropagator);
-  const MagneticField* field = thePropagator->magneticField();
+//   const MagneticField* field = thePropagator->magneticField();
   
-  ESHandle<Propagator> theAnalyticPropagator;
-  iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", theAnalyticPropagator);
+//   ESHandle<Propagator> theAnalyticPropagator;
+//   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", theAnalyticPropagator);
+  
+  ESHandle<MagneticField> fieldh;
+  iSetup.get<IdealMagneticFieldRecord>().get("", fieldh);
+  std::unique_ptr<MagneticFieldOffset> fieldOffset = std::make_unique<MagneticFieldOffset>(&(*fieldh));
+  
+  std::unique_ptr<PropagatorWithMaterial> fPropagator = std::make_unique<PropagatorWithMaterial>(alongMomentum, 0.105, fieldOffset.get(), 1.6, true,  -1., true);
+  
+  const MagneticField* field = fPropagator->magneticField();
   
 //   Handle<TrajTrackAssociationCollection> trackH;
 //   Handle<reco::TrackCollection> trackH;
@@ -288,11 +297,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //   PropagatorWithMaterial rPropagator(oppositeToMomentum, mass, field, maxDPhi, true, -1., false);
 //   PropagatorWithMaterial fPropagator(alongMomentum, mass, field, maxDPhi, true, -1., false);
   
-  std::unique_ptr<PropagatorWithMaterial> fPropagator(static_cast<PropagatorWithMaterial*>(thePropagator->clone()));
-  fPropagator->setPropagationDirection(alongMomentum);
-  
-  std::unique_ptr<PropagatorWithMaterial> fAnalyticPropagator(static_cast<PropagatorWithMaterial*>(theAnalyticPropagator->clone()));
-  fAnalyticPropagator->setPropagationDirection(alongMomentum);
+//   std::unique_ptr<PropagatorWithMaterial> fPropagator(static_cast<PropagatorWithMaterial*>(thePropagator->clone()));
+//   fPropagator->setPropagationDirection(alongMomentum);
+//   
+//   std::unique_ptr<PropagatorWithMaterial> fAnalyticPropagator(static_cast<PropagatorWithMaterial*>(theAnalyticPropagator->clone()));
+//   fAnalyticPropagator->setPropagationDirection(alongMomentum);
   
   KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
@@ -1425,6 +1434,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       simlocalyref = -99.;
       
       
+      
+      const uint32_t gluedid0 = trackerTopology->glued(hits[0]->det()->geographicalId());
+      const bool isglued0 = gluedid0 != 0;
+      const DetId parmdetid0 = isglued0 ? DetId(gluedid0) : hits[0]->geographicalId();
+      const unsigned int bfieldidx = detidparms.at(std::make_pair(6, parmdetid0));
+      fieldOffset->setOffset(corparms_[bfieldidx]);
+      
 //       dhessv.reserve(nhits-1);
       
       unsigned int parmidx = 0;
@@ -1459,7 +1475,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
 //       ;
       
-      auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *hits[0]->surface());
+//       auto const &surface0orig = *hits[0]->surface();
+      auto const &surface0 = *surfacemap_.at(hits[0]->geographicalId());
+//       printf("detid = %u, parmdetid = %u, old = %p, new  = %p\n", hits[0]->geographicalId().rawId(), parmdetid0.rawId(), &surface0orig, &surface0);
+//       std::cout << "old xi = " << surface0orig.mediumProperties().xi() << " new xi = " << surface0.mediumProperties().xi() << " dxi = " << surface0.mediumProperties().xi() - surface0orig.mediumProperties().xi() << std::endl;
+      auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, surface0);
+//       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *hits[0]->surface());
 //       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *beampipe);
       if (!propresult.first.isValid()) {
         std::cout << "Abort: Propagation of reference state Failed!" << std::endl;
@@ -1746,6 +1767,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
           
 
+          const uint32_t gluedidip1 = trackerTopology->glued(hits[ihit + 1]->det()->geographicalId());
+          const bool isgluedip1 = gluedidip1 != 0;
+          const DetId parmdetidip1 = isgluedip1 ? DetId(gluedidip1) : hits[ihit + 1]->geographicalId();
+          const unsigned int bfieldidx = detidparms.at(std::make_pair(6, parmdetidip1));
+          fieldOffset->setOffset(corparms_[bfieldidx]);
+          
 //           if (ihit==0) {
 //             FreeTrajectoryState tmpfts(updtsospos, updtsos.globalParameters().momentum(), updtsos.charge(), field);
 //             propresult = fPropagator->geometricalPropagator().propagateWithPath(tmpfts, *hits[ihit+1]->surface());
@@ -1753,7 +1780,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //           else {
 //             propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
 //           }
-          propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
+          
+
+//           auto const &surfaceip1 = *hits[ihit+1]->surface();
+          auto const &surfaceip1 = *surfacemap_.at(hits[ihit+1]->geographicalId());
+          propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, surfaceip1);
+//           propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
           if (!propresult.first.isValid()) {
             std::cout << "Abort: Propagation Failed!" << std::endl;
             valid = false;

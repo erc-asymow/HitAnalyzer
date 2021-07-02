@@ -254,6 +254,8 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
   edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
 
+  std::string corFile_;
+  
 //   SiStripClusterInfo siStripClusterInfo_;
 
   
@@ -350,6 +352,9 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
   std::vector<std::pair<int, DetId>> detidparmsrev;
+  
+  std::map<DetId, ReferenceCountingPointer<Plane>> surfacemap_;
+  std::vector<float> corparms_;
   
   unsigned int run;
   unsigned int lumi;

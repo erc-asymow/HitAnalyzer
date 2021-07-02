@@ -1,4 +1,4 @@
-<!-- <Flags CXXFLAGS="-g"/> -->
+<Flags CXXFLAGS="-g"/>
 <use name="FWCore/Framework"/>
 <use name="FWCore/PluginManager"/>
 <use name="FWCore/ParameterSet"/>
@@ -32,6 +32,11 @@
 <use name="TrackPropagation/RungeKutta"/>
 <use name="CommonTools/UtilAlgos"/>
 <use name="RecoLocalTracker/SiStripClusterizer"/>
+<use name="TrackingTools/TransientTrack"/>
+<use name="RecoVertex/LinearizationPointFinders"/>
+<use name="RecoVertex/KinematicFitPrimitives"/>
+<use name="RecoVertex/KinematicFit"/>
+<use name="Alignment/CommonAlignment"/>
 
 <export>
   <lib name="1"/>

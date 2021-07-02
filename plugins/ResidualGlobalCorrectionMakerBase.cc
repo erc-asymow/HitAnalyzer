@@ -76,6 +76,7 @@
 #include "FWCore/ServiceRegistry/interface/Service.h"
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 
+#include "Alignment/CommonAlignment/interface/Utilities.h"
 
 
 
@@ -128,6 +129,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   bsConstraint_ = iConfig.getParameter<bool>("bsConstraint");
   applyHitQuality_ = iConfig.getParameter<bool>("applyHitQuality");
   doMuons_ = iConfig.getParameter<bool>("doMuons");
+  corFile_ = iConfig.getParameter<std::string>("corFile");
 
   inputBs_ = consumes<reco::BeamSpot>(edm::InputTag("offlineBeamSpot"));
 
@@ -271,9 +273,6 @@ void ResidualGlobalCorrectionMakerBase::endStream()
 void 
 ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup const& es)
 {
-  if (detidparms.size()>0) {
-    return;
-  }
   
   edm::ESHandle<GlobalTrackingGeometry> globalGeometry;
   es.get<GlobalTrackingGeometryRecord>().get(globalGeometry);
@@ -288,10 +287,8 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
   es.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
   const MagneticField* field = thePropagator->magneticField();
   
-  detidparms.clear();
-  detidparmsrev.clear();
-  
   std::set<std::pair<int, DetId> > parmset;
+  
   
   for (const GeomDet* det : globalGeometry->detUnits()) {
     if (!det) {
@@ -338,153 +335,249 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
     }
   }
   
-//   assert(0);
+  if (detidparms.empty()) {
+
+    
+    detidparms.clear();
+    detidparmsrev.clear();
+    
+  //   assert(0);
+    
+  //   TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
+    fout->cd();
+    TTree *runtree = new TTree("runtree", "");
+    
+    unsigned int iidx;
+    int parmtype;
+    unsigned int rawdetid;
+    int subdet;
+    int layer;
+    int stereo;
+    float x;
+    float y;
+    float z;
+    float eta;
+    float phi;
+    float rho;
+    float xi;
+    float bx;
+    float by;
+    float bz;
+
+    runtree->Branch("iidx", &iidx);
+    runtree->Branch("parmtype", &parmtype);
+    runtree->Branch("rawdetid", &rawdetid);
+    runtree->Branch("subdet", &subdet);
+    runtree->Branch("layer", &layer);
+    runtree->Branch("stereo", &stereo);
+    runtree->Branch("x", &x);
+    runtree->Branch("y", &y);
+    runtree->Branch("z", &z);
+    runtree->Branch("eta", &eta);
+    runtree->Branch("phi", &phi);
+    runtree->Branch("rho", &rho);
+    runtree->Branch("xi", &xi);
+    runtree->Branch("bx", &bx);
+    runtree->Branch("by", &by);
+    runtree->Branch("bz", &bz);
+    
+    unsigned int globalidx = 0;
+    for (const auto& key: parmset) {
+      
+      //fill info
+      const DetId& detid = key.second;
+      const GeomDet* det = globalGeometry->idToDet(detid);
+      
+  //     if (detid.rawId() == 302122272) {
+  //       std::cout << "width: " << det->surface().bounds().width() << std::endl;
+  //       std::cout << "length: " << det->surface().bounds().length() << std::endl;
+  //       std::cout << "thickness: " << det->surface().bounds().thickness() << std::endl;
+  //     }
+      
+      layer = 0;
+      stereo = 0;
+  //     int subdet = det->subDetector();
+  //     float eta = det->surface().position().eta();
+
+      if (det->subDetector() == GeomDetEnumerators::PixelBarrel)
+      {
+        PXBDetId detid(det->geographicalId());
+        layer = detid.layer();
+      }
+      else if (det->subDetector() == GeomDetEnumerators::PixelEndcap)
+      {
+        PXFDetId detid(det->geographicalId());
+        layer = -1 * (detid.side() == 1) * detid.disk() + (detid.side() == 2) * detid.disk();
+      }
+      else if (det->subDetector() == GeomDetEnumerators::TIB)
+      {
+  //       TIBDetId detid(det->geographicalId());
+  //       layer = detid.layer();
+        layer = trackerTopology->tibLayer(det->geographicalId());
+        stereo = trackerTopology->isStereo(det->geographicalId());
+      }
+      else if (det->subDetector() == GeomDetEnumerators::TOB)
+      {
+  //       TOBDetId detid(det->geographicalId());
+  //       layer = detid.layer();
+        layer = trackerTopology->tobLayer(det->geographicalId());
+        stereo = trackerTopology->isStereo(det->geographicalId());
+      }
+      else if (det->subDetector() == GeomDetEnumerators::TID)
+      {
+        unsigned int side = trackerTopology->tidSide(detid);
+        unsigned int wheel = trackerTopology->tidWheel(detid);
+        layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
+        stereo = trackerTopology->isStereo(det->geographicalId());
+
+      }
+      else if (det->subDetector() == GeomDetEnumerators::TEC)
+      {
+  //       TECDetId detid(det->geographicalId());
+  //       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
+        unsigned int side = trackerTopology->tecSide(detid);
+        unsigned int wheel = trackerTopology->tecWheel(detid);
+        layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
+        stereo = trackerTopology->isStereo(det->geographicalId());
+      }
+      
+  //     ParmInfo parminfo;
+  //     parminfo.parmtype = key.first;
+  //     parminfo.subdet = det->subDetector();
+  //     parminfo.layer = layer;
+  //     parminfo.x = det->surface().position().x();
+  //     parminfo.y = det->surface().position().y();
+  //     parminfo.z = det->surface().position().z();
+  //     parminfo.eta = det->surface().position().eta();
+  //     parminfo.phi = det->surface().position().phi();
+  //     parminfo.rho = det->surface().position().perp();
+
+      iidx = globalidx;
+      parmtype = key.first;
+      rawdetid = detid;
+      subdet = det->subDetector();
+      //layer already set above
+      x = det->surface().position().x();
+      y = det->surface().position().y();
+      z = det->surface().position().z();
+      eta = det->surface().position().eta();
+      phi = det->surface().position().phi();
+      rho = det->surface().position().perp();
+      xi = det->surface().mediumProperties().xi();
+      
+      auto const bfieldval = field->inTesla(det->surface().position());
+      bx = bfieldval.x();
+      by = bfieldval.y();
+      bz = bfieldval.z();
+      
+      //fill map
+      detidparms.emplace(key, globalidx);
+      detidparmsrev.emplace_back(key);
+      globalidx++;
+      
+      runtree->Fill();
+    }
+    
+  //   runfout->Write();
+  //   runfout->Close();
+    
+    unsigned int nglobal = detidparms.size();
+  //   std::sort(detidparms.begin(), detidparms.end());
+    std::cout << "nglobalparms = " << detidparms.size() << std::endl;
+    
+    //initialize gradient
+    if (!gradagg.size()) {
+      gradagg.resize(nglobal, 0.);
+    }
+    
+    // load corrections from previous iteration if applicable
+    corparms_.assign(parmset.size(), 0.);
+    
+    if (!corFile_.empty()) {
+      TFile *corfile = TFile::Open(corFile_.c_str());
+      TTree *cortree = (TTree*)corfile->Get("parmtree");
+      
+      unsigned int idx;
+      float val;
+      
+      cortree->SetBranchAddress("idx", &idx);
+      cortree->SetBranchAddress("x", &val);
+      
+      const unsigned int nparms = cortree->GetEntries();
+      assert(nparms == parmset.size());
+      for (unsigned int iparm = 0; iparm < nparms; ++iparm) {
+        cortree->GetEntry(iparm);
+        corparms_[idx] = val;
+      }
+    }
   
-//   TFile *runfout = new TFile("trackTreeGradsParmInfo.root", "RECREATE");
-  fout->cd();
-  TTree *runtree = new TTree("runtree", "");
-  
-  unsigned int iidx;
-  int parmtype;
-  unsigned int rawdetid;
-  int subdet;
-  int layer;
-  int stereo;
-  float x;
-  float y;
-  float z;
-  float eta;
-  float phi;
-  float rho;
-  float xi;
-  float bx;
-  float by;
-  float bz;
-
-  runtree->Branch("iidx", &iidx);
-  runtree->Branch("parmtype", &parmtype);
-  runtree->Branch("rawdetid", &rawdetid);
-  runtree->Branch("subdet", &subdet);
-  runtree->Branch("layer", &layer);
-  runtree->Branch("stereo", &stereo);
-  runtree->Branch("x", &x);
-  runtree->Branch("y", &y);
-  runtree->Branch("z", &z);
-  runtree->Branch("eta", &eta);
-  runtree->Branch("phi", &phi);
-  runtree->Branch("rho", &rho);
-  runtree->Branch("xi", &xi);
-  runtree->Branch("bx", &bx);
-  runtree->Branch("by", &by);
-  runtree->Branch("bz", &bz);
-  
-  unsigned int globalidx = 0;
-  for (const auto& key: parmset) {
-    
-    //fill info
-    const DetId& detid = key.second;
-    const GeomDet* det = globalGeometry->idToDet(detid);
-    
-//     if (detid.rawId() == 302122272) {
-//       std::cout << "width: " << det->surface().bounds().width() << std::endl;
-//       std::cout << "length: " << det->surface().bounds().length() << std::endl;
-//       std::cout << "thickness: " << det->surface().bounds().thickness() << std::endl;
-//     }
-    
-    layer = 0;
-    stereo = 0;
-//     int subdet = det->subDetector();
-//     float eta = det->surface().position().eta();
-
-    if (det->subDetector() == GeomDetEnumerators::PixelBarrel)
-    {
-      PXBDetId detid(det->geographicalId());
-      layer = detid.layer();
-    }
-    else if (det->subDetector() == GeomDetEnumerators::PixelEndcap)
-    {
-      PXFDetId detid(det->geographicalId());
-      layer = -1 * (detid.side() == 1) * detid.disk() + (detid.side() == 2) * detid.disk();
-    }
-    else if (det->subDetector() == GeomDetEnumerators::TIB)
-    {
-//       TIBDetId detid(det->geographicalId());
-//       layer = detid.layer();
-      layer = trackerTopology->tibLayer(det->geographicalId());
-      stereo = trackerTopology->isStereo(det->geographicalId());
-    }
-    else if (det->subDetector() == GeomDetEnumerators::TOB)
-    {
-//       TOBDetId detid(det->geographicalId());
-//       layer = detid.layer();
-      layer = trackerTopology->tobLayer(det->geographicalId());
-      stereo = trackerTopology->isStereo(det->geographicalId());
-    }
-    else if (det->subDetector() == GeomDetEnumerators::TID)
-    {
-      unsigned int side = trackerTopology->tidSide(detid);
-      unsigned int wheel = trackerTopology->tidWheel(detid);
-      layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
-      stereo = trackerTopology->isStereo(det->geographicalId());
-
-    }
-    else if (det->subDetector() == GeomDetEnumerators::TEC)
-    {
-//       TECDetId detid(det->geographicalId());
-//       layer = -1 * (detid.side() == 1) * detid.wheel() + (detid.side() == 2) * detid.wheel();
-      unsigned int side = trackerTopology->tecSide(detid);
-      unsigned int wheel = trackerTopology->tecWheel(detid);
-      layer = -1 * (side == 1) * wheel + (side == 2) * wheel;
-      stereo = trackerTopology->isStereo(det->geographicalId());
-    }
-    
-//     ParmInfo parminfo;
-//     parminfo.parmtype = key.first;
-//     parminfo.subdet = det->subDetector();
-//     parminfo.layer = layer;
-//     parminfo.x = det->surface().position().x();
-//     parminfo.y = det->surface().position().y();
-//     parminfo.z = det->surface().position().z();
-//     parminfo.eta = det->surface().position().eta();
-//     parminfo.phi = det->surface().position().phi();
-//     parminfo.rho = det->surface().position().perp();
-
-    iidx = globalidx;
-    parmtype = key.first;
-    rawdetid = detid;
-    subdet = det->subDetector();
-    //layer already set above
-    x = det->surface().position().x();
-    y = det->surface().position().y();
-    z = det->surface().position().z();
-    eta = det->surface().position().eta();
-    phi = det->surface().position().phi();
-    rho = det->surface().position().perp();
-    xi = det->surface().mediumProperties().xi();
-    
-    auto const bfieldval = field->inTesla(det->surface().position());
-    bx = bfieldval.x();
-    by = bfieldval.y();
-    bz = bfieldval.z();
-    
-    //fill map
-    detidparms.emplace(key, globalidx);
-    detidparmsrev.emplace_back(key);
-    globalidx++;
-    
-    runtree->Fill();
   }
   
-//   runfout->Write();
-//   runfout->Close();
-  
-  unsigned int nglobal = detidparms.size();
-//   std::sort(detidparms.begin(), detidparms.end());
-  std::cout << "nglobalparms = " << detidparms.size() << std::endl;
-  
-  //initialize gradient
-  if (!gradagg.size()) {
-    gradagg.resize(nglobal, 0.);
+  surfacemap_.clear();
+  // fill map of modified surfaces with results of previous iteration if applicable
+  for (const GeomDet* det : globalGeometry->detUnits()) {
+    if (!det) {
+      continue;
+    }
+    if (GeomDetEnumerators::isTracker(det->subDetector())) {
+      
+      const bool ispixel = GeomDetEnumerators::isTrackerPixel(det->subDetector());
+      const bool isendcap = GeomDetEnumerators::isEndcap(det->subDetector());
+      
+      const uint32_t gluedid = trackerTopology->glued(det->geographicalId());
+      const bool isglued = gluedid != 0;
+      const DetId parmdetid = isglued ? DetId(gluedid) : det->geographicalId();
+      const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : det;
+      
+      const double xifraction = isglued ? det->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
+      
+      const bool align2d = ispixel;
+
+      
+
+      
+      const unsigned int dxidx = detidparms.at(std::make_pair(0, det->geographicalId()));
+      const unsigned int dthetaidx = detidparms.at(std::make_pair(5, det->geographicalId()));
+//       const unsigned int dbidx = detidparms.at(std::make_pair(6, parmdetid));
+      const unsigned int dxiidx = detidparms.at(std::make_pair(7, parmdetid));
+      
+      // n.b. sign is flipped for alignment terms
+      const float dx = -corparms_[dxidx];
+//       const float dy = corparms_[dyidx];
+      const float dtheta = -corparms_[dthetaidx];
+//       const float db = corparms_[dbdx];
+      const float dxi = corparms_[dxiidx];
+      
+      float dy = 0.;
+      if (align2d) {
+        const unsigned int dyidx = detidparms.at(std::make_pair(1, det->geographicalId())); 
+        dy = -corparms_[dyidx];
+      }
+      
+      ReferenceCountingPointer<Plane> plane = Plane::build(det->surface());
+//       std::shared_ptr<Plane> plane = std::make_shared<Plane>(det->surface());
+      
+      //move, rotate and modify material
+      plane->move(plane->toGlobal(LocalVector(dx, dy, 0.)));
+      plane->rotate(Surface::RotationType(Surface::RotationType::BasicVector(plane->toGlobal(LocalVector(0.,0.,1.))), dtheta));
+      
+//       if (plane->mediumProperties().xi() + xifraction*dxi < 0.05*plane->mediumProperties().xi()) {
+//         std::cout << "xi value clipped!" << std::endl;
+//       }
+      
+      const float radLen = plane->mediumProperties().radLen();
+      const float xi = std::max(plane->mediumProperties().xi() + xifraction*dxi, 0.05*plane->mediumProperties().xi());
+      const MediumProperties mp(radLen, xi);
+      plane->setMediumProperties(mp);
+      
+//       printf("in beginRun, detid = %u, parmdetid = %u, oldp = %p, newp = %p\n", det->geographicalId().rawId(), parmdetid.rawId(), &det->surface(), &(*plane));
+//       std::cout << "oldxi = " << det->surface().mediumProperties().xi() << " newxi = " << plane->mediumProperties().xi() << " dxi = " << dxi << " xifraction = " << xifraction << std::endl;
+      
+      surfacemap_[det->geographicalId()] = plane;
+      
+
+    }
+    
   }
     
   

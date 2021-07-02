@@ -1,4 +1,5 @@
 #include "ResidualGlobalCorrectionMakerBase.h"
+#include "MagneticFieldOffset.h"
 
 // required for Transient Tracks
 #include "TrackingTools/TransientTrack/interface/TransientTrack.h"
@@ -212,15 +213,28 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
   edm::ESHandle<TransientTrackingRecHitBuilder> ttrh;
   iSetup.get<TransientRecHitRecord>().get("WithAngleAndTemplate",ttrh);
   
-  ESHandle<Propagator> thePropagator;
-  iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
+//   ESHandle<Propagator> thePropagator;
+//   iSetup.get<TrackingComponentsRecord>().get("RungeKuttaTrackerPropagator", thePropagator);
 //   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", thePropagator);
 //   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterialParabolicMf", thePropagator);
 //   iSetup.get<TrackingComponentsRecord>().get("Geant4ePropagator", thePropagator);
-  const MagneticField* field = thePropagator->magneticField();
+//   const MagneticField* field = thePropagator->magneticField();
   
-  ESHandle<Propagator> theAnalyticPropagator;
-  iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", theAnalyticPropagator);
+  ESHandle<MagneticField> fieldh;
+  iSetup.get<IdealMagneticFieldRecord>().get("", fieldh);
+  std::unique_ptr<MagneticFieldOffset> fieldOffset = std::make_unique<MagneticFieldOffset>(&(*fieldh));
+  
+  std::unique_ptr<PropagatorWithMaterial> fPropagator = std::make_unique<PropagatorWithMaterial>(alongMomentum, 0.105, fieldOffset.get(), 1.6, true,  -1., true);
+  
+  const MagneticField* field = fPropagator->magneticField();
+
+  
+//   std::cout << "bfield orig prop type: " << typeid(*thePropagator->magneticField()).name() << std::endl;
+//   std::cout << "bfield orig type: " << typeid(*fieldh).name() << std::endl;
+//   std::cout << "bfield type: " << typeid(*field).name() << std::endl;
+  
+//   ESHandle<Propagator> theAnalyticPropagator;
+//   iSetup.get<TrackingComponentsRecord>().get("PropagatorWithMaterial", theAnalyticPropagator);
 
   
   Handle<std::vector<reco::GenParticle>> genPartCollection;
@@ -228,11 +242,11 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
   }
   
-  std::unique_ptr<PropagatorWithMaterial> fPropagator(static_cast<PropagatorWithMaterial*>(thePropagator->clone()));
-  fPropagator->setPropagationDirection(alongMomentum);
+//   std::unique_ptr<PropagatorWithMaterial> fPropagator(static_cast<PropagatorWithMaterial*>(thePropagator->clone()));
+//   fPropagator->setPropagationDirection(alongMomentum);
   
-  std::unique_ptr<PropagatorWithMaterial> fAnalyticPropagator(static_cast<PropagatorWithMaterial*>(theAnalyticPropagator->clone()));
-  fAnalyticPropagator->setPropagationDirection(alongMomentum);
+//   std::unique_ptr<PropagatorWithMaterial> fAnalyticPropagator(static_cast<PropagatorWithMaterial*>(theAnalyticPropagator->clone()));
+//   fAnalyticPropagator->setPropagationDirection(alongMomentum);
   
   KFUpdator updator;
   TkClonerImpl const& cloner = static_cast<TkTransientTrackingRecHitBuilder const *>(ttrh.product())->cloner();
@@ -510,6 +524,14 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
   //         FreeTrajectoryState refFts = outparts[id]->currentState().freeTrajectoryState();
           FreeTrajectoryState &refFts = refftsarr[id];
           auto &hits = hitsarr[id];
+        
+          
+
+          const uint32_t gluedid0 = trackerTopology->glued(hits[0]->det()->geographicalId());
+          const bool isglued0 = gluedid0 != 0;
+          const DetId parmdetid0 = isglued0 ? DetId(gluedid0) : hits[0]->geographicalId();
+          const unsigned int bfieldidx = detidparms.at(std::make_pair(6, parmdetid0));
+          fieldOffset->setOffset(corparms_[bfieldidx]);
           
           std::vector<TrajectoryStateOnSurface> &layerStates = layerStatesarr[id];
           
@@ -546,7 +568,9 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
       //         currentFts = refFts;
           }
           
-          auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *hits[0]->surface());
+//           auto const &surface0 = *hits[0]->surface();
+          auto const &surface0 = *surfacemap_.at(hits[0]->geographicalId());
+          auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, surface0);
     //       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *beampipe);
           if (!propresult.first.isValid()) {
             std::cout << "Abort: Propagation of reference state Failed!" << std::endl;
@@ -641,7 +665,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
             const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
 //             const Matrix<double, 5, 6> EdE = materialEffectsJacobianVar(updtsos, fPropagator->materialEffectsUpdator());
           
-            const double xival = updtsos.surface().mediumProperties().xi();
+//             const double xival = updtsos.surface().mediumProperties().xi();
             
             //process noise jacobians
   //           const std::array<Matrix<double, 5, 5>, 5> dQs = processNoiseJacobians(updtsos, fPropagator->materialEffectsUpdator());
@@ -740,6 +764,12 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
             
             if (ihit < (tracknhits-1)) {
               
+              const uint32_t gluedidip1 = trackerTopology->glued(hits[ihit + 1]->det()->geographicalId());
+              const bool isgluedip1 = gluedidip1 != 0;
+              const DetId parmdetidip1 = isgluedip1 ? DetId(gluedidip1) : hits[ihit + 1]->geographicalId();
+              const unsigned int bfieldidx = detidparms.at(std::make_pair(6, parmdetidip1));
+              fieldOffset->setOffset(corparms_[bfieldidx]);
+              
   //             std::cout << "EdE first hit:" << std::endl;
   //             std::cout << EdE << std::endl;
   //             
@@ -748,8 +778,10 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
 //               AlgebraicVector5 idx0(0., 0., 0., 0., 0.);
               const Vector5d dx0 = Map<const Vector5d>(idx0.Array());
               
-              
-              propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
+
+//               auto const &surfaceip1 = *hits[ihit+1]->surface();
+              auto const &surfaceip1 = *surfacemap_.at(hits[ihit+1]->geographicalId());
+              propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, surfaceip1);
               if (!propresult.first.isValid()) {
                 std::cout << "Abort: Propagation Failed!" << std::endl;
                 valid = false;
