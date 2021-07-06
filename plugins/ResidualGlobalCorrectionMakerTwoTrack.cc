@@ -945,6 +945,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 
                 
                 const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+//                 const MSScalar deloss = deloss0 + dqop - dqopm - dE*dxi;
                 const MSScalar chisqeloss = deloss*invSigmaE*deloss;
                 
                 const MSScalar chisq = chisqms + chisqeloss;
@@ -1106,6 +1107,7 @@ void ResidualGlobalCorrectionMakerTwoTrack::analyze(const edm::Event &iEvent, co
                 
                 
                 const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+//                 const MSScalar deloss = deloss0 + dqop - dqopm - dE*dxi;
                 const MSScalar chisqeloss = deloss*invSigmaE*deloss;
                 
                 const MSScalar chisq = chisqms + chisqeloss;

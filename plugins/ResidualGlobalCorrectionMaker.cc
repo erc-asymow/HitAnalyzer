@@ -1332,71 +1332,74 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       hitidxv.clear();
       hitidxv.reserve(nvalid);
       
-      dxrecgen.clear();
-      dxrecgen.reserve(nvalid);
-      
-      dyrecgen.clear();
-      dyrecgen.reserve(nvalid);
-      
-      dxsimgen.clear();
-      dxsimgen.reserve(nvalid);
-      
-      dysimgen.clear();
-      dysimgen.reserve(nvalid);
-      
-      dxrecsim.clear();
-      dxrecsim.reserve(nvalid);
-      
-      dyrecsim.clear();
-      dyrecsim.reserve(nvalid);
-      
-      dxreccluster.clear();
-      dxreccluster.reserve(nvalid);
-      
-      dyreccluster.clear();
-      dyreccluster.reserve(nvalid);
-      
-      dxerr.clear();
-      dxerr.reserve(nvalid);
-      
-      dyerr.clear();
-      dyerr.reserve(nvalid);
-      
-      clusterSize.clear();
-      clusterSize.reserve(nvalid);
-      
-      clusterSizeX.clear();
-      clusterSizeX.reserve(nvalid);
-      
-      clusterSizeY.clear();
-      clusterSizeY.reserve(nvalid);
-      
-      clusterCharge.clear();
-      clusterCharge.reserve(nvalid);
-      
-      clusterChargeBin.clear();
-      clusterChargeBin.reserve(nvalid);
-      
-      clusterOnEdge.clear();
-      clusterOnEdge.reserve(nvalid);
-      
-      clusterProbXY.clear();
-      clusterProbXY.reserve(nvalid);
-      
-      clusterSN.clear();
-      clusterSN.reserve(nvalid);
-      
-      localqop.clear();
-      localdxdz.clear();
-      localdydz.clear();
-      localx.clear();
-      localy.clear();
+      if (iiter == 0) {
+        dxrecgen.clear();
+        dxrecgen.reserve(nvalid);
+        
+        dyrecgen.clear();
+        dyrecgen.reserve(nvalid);
+        
+        dxsimgen.clear();
+        dxsimgen.reserve(nvalid);
+        
+        dysimgen.clear();
+        dysimgen.reserve(nvalid);
+        
+        dxrecsim.clear();
+        dxrecsim.reserve(nvalid);
+        
+        dyrecsim.clear();
+        dyrecsim.reserve(nvalid);
+        
+        dxreccluster.clear();
+        dxreccluster.reserve(nvalid);
+        
+        dyreccluster.clear();
+        dyreccluster.reserve(nvalid);
+        
+        dxerr.clear();
+        dxerr.reserve(nvalid);
+        
+        dyerr.clear();
+        dyerr.reserve(nvalid);
+        
+        clusterSize.clear();
+        clusterSize.reserve(nvalid);
+        
+        clusterSizeX.clear();
+        clusterSizeX.reserve(nvalid);
+        
+        clusterSizeY.clear();
+        clusterSizeY.reserve(nvalid);
+        
+        clusterCharge.clear();
+        clusterCharge.reserve(nvalid);
+        
+        clusterChargeBin.clear();
+        clusterChargeBin.reserve(nvalid);
+        
+        clusterOnEdge.clear();
+        clusterOnEdge.reserve(nvalid);
+        
+        clusterProbXY.clear();
+        clusterProbXY.reserve(nvalid);
+        
+        clusterSN.clear();
+        clusterSN.reserve(nvalid);
+        
+        localqop.clear();
+        localdxdz.clear();
+        localdydz.clear();
+        localx.clear();
+        localy.clear();
 
-      localqop.reserve(nvalid);
-      localdxdz.reserve(nvalid);
-      localdydz.reserve(nvalid);
-      localx.reserve(nvalid);
-      localy.reserve(nvalid);      
+        localqop.reserve(nvalid);
+        localdxdz.reserve(nvalid);
+        localdydz.reserve(nvalid);
+        localx.reserve(nvalid);
+        localy.reserve(nvalid);
+
+      }      
       
         
       const bool islikelihood = false;
@@ -2032,6 +2035,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               
               
               const MSScalar deloss = deloss0 + dqop - Eqop*dqopm - (Ealpha*dalpham)[0] - dE*dxi;
+//               const MSScalar deloss = deloss0 + dqop - dqopm - dE*dxi;
               const MSScalar chisqeloss = deloss*invSigmaE*deloss;
               
               chisq = chisqms + chisqeloss;
@@ -2586,121 +2590,124 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               }
             }
             
-            // fill hit validation information
-            Vector2d dyrecgenlocal;
-            dyrecgenlocal << dy0[0].value().value(), dy0[1].value().value();
-            const Vector2d dyrecgeneig = R*dyrecgenlocal;
-            dxrecgen.push_back(dyrecgeneig[0]);
-            dyrecgen.push_back(dyrecgeneig[1]);
-            
-            dxerr.push_back(1./std::sqrt(Vinv(0,0).value().value()));
-            dyerr.push_back(1./std::sqrt(Vinv(1,1).value().value()));
+            if (iiter == 0) {
+              
+              // fill hit validation information
+              Vector2d dyrecgenlocal;
+              dyrecgenlocal << dy0[0].value().value(), dy0[1].value().value();
+              const Vector2d dyrecgeneig = R*dyrecgenlocal;
+              dxrecgen.push_back(dyrecgeneig[0]);
+              dyrecgen.push_back(dyrecgeneig[1]);
+              
+              dxerr.push_back(1./std::sqrt(Vinv(0,0).value().value()));
+              dyerr.push_back(1./std::sqrt(Vinv(1,1).value().value()));
 
-            localqop.push_back(updtsos.localParameters().qbp());
-            localdxdz.push_back(updtsos.localParameters().dxdz());
-            localdydz.push_back(updtsos.localParameters().dydz());
-            localx.push_back(updtsos.localPosition().x());
-            localy.push_back(updtsos.localPosition().y());
-            
-            
-            const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(preciseHit.get());
-            assert(tkhit != nullptr);
-            
-            if (ispixel) {
-              const SiPixelCluster& cluster = *tkhit->cluster_pixel();
-              const SiPixelRecHit *pixhit = dynamic_cast<const SiPixelRecHit*>(tkhit);
-              assert(pixhit != nullptr);
-//               std::cout << "pixel cluster sizeX = " << cluster.sizeX() <<" sizeY = " << cluster.sizeY() << std::endl;
-              clusterSize.push_back(cluster.size());
-              clusterSizeX.push_back(cluster.sizeX());
-              clusterSizeY.push_back(cluster.sizeY());
-              clusterCharge.push_back(cluster.charge());
-              clusterChargeBin.push_back(pixhit->qBin());
-              clusterOnEdge.push_back(pixhit->isOnEdge());
-              if (pixhit->hasFilledProb()) {
-                clusterProbXY.push_back(pixhit->clusterProbability(0));
+              localqop.push_back(updtsos.localParameters().qbp());
+              localdxdz.push_back(updtsos.localParameters().dxdz());
+              localdydz.push_back(updtsos.localParameters().dydz());
+              localx.push_back(updtsos.localPosition().x());
+              localy.push_back(updtsos.localPosition().y());
+              
+              
+              const TrackerSingleRecHit* tkhit = dynamic_cast<const TrackerSingleRecHit*>(preciseHit.get());
+              assert(tkhit != nullptr);
+              
+              if (ispixel) {
+                const SiPixelCluster& cluster = *tkhit->cluster_pixel();
+                const SiPixelRecHit *pixhit = dynamic_cast<const SiPixelRecHit*>(tkhit);
+                assert(pixhit != nullptr);
+  //               std::cout << "pixel cluster sizeX = " << cluster.sizeX() <<" sizeY = " << cluster.sizeY() << std::endl;
+                clusterSize.push_back(cluster.size());
+                clusterSizeX.push_back(cluster.sizeX());
+                clusterSizeY.push_back(cluster.sizeY());
+                clusterCharge.push_back(cluster.charge());
+                clusterChargeBin.push_back(pixhit->qBin());
+                clusterOnEdge.push_back(pixhit->isOnEdge());
+                if (pixhit->hasFilledProb()) {
+                  clusterProbXY.push_back(pixhit->clusterProbability(0));
+                }
+                else {
+                  clusterProbXY.push_back(2.);
+                }
+                
+                clusterSN.push_back(-99.);
               }
               else {
-                clusterProbXY.push_back(2.);
+                const SiStripCluster& cluster = *tkhit->cluster_strip();
+  //               siStripClusterInfo_.setCluster(cluster, preciseHit->geographicalId().rawId());
+                SiStripClusterInfo clusterInfo = SiStripClusterInfo(cluster, iSetup, preciseHit->geographicalId().rawId());
+                clusterSize.push_back(cluster.amplitudes().size());
+                clusterSizeX.push_back(cluster.amplitudes().size());
+                clusterSizeY.push_back(1);
+                clusterCharge.push_back(cluster.charge());
+                clusterChargeBin.push_back(-99);
+                clusterOnEdge.push_back(-99);
+                clusterProbXY.push_back(-99.);
+                clusterSN.push_back(clusterInfo.signalOverNoise());
               }
               
-              clusterSN.push_back(-99.);
-            }
-            else {
-              const SiStripCluster& cluster = *tkhit->cluster_strip();
-//               siStripClusterInfo_.setCluster(cluster, preciseHit->geographicalId().rawId());
-              SiStripClusterInfo clusterInfo = SiStripClusterInfo(cluster, iSetup, preciseHit->geographicalId().rawId());
-              clusterSize.push_back(cluster.amplitudes().size());
-              clusterSizeX.push_back(cluster.amplitudes().size());
-              clusterSizeY.push_back(1);
-              clusterCharge.push_back(cluster.charge());
-              clusterChargeBin.push_back(-99);
-              clusterOnEdge.push_back(-99);
-              clusterProbXY.push_back(-99.);
-              clusterSN.push_back(clusterInfo.signalOverNoise());
-            }
-            
-//             if (ispixel) {
-//               const SiPixelCluster& cluster = *tkhit->cluster_pixel();
-//               dxreccluster.push_back(cluster.x() - preciseHit->localPosition().x());
-//               dyreccluster.push_back(cluster.y() - preciseHit->localPosition().y());
-//             }
-//             else {
-//               dxreccluster.push_back(-99.);
-//               dyreccluster.push_back(-99.);
-//             }
-            
-            if (doSim_) {
-              bool simvalid = false;
-              for (auto const& simhith : simHits) {
-                for (const PSimHit& simHit : *simhith) {
-                  if (simHit.detUnitId() == preciseHit->geographicalId()) {
-//                     std::cout << "entry point: " << simHit.entryPoint() << std::endl;
-//                     std::cout << "exit point: " << simHit.exitPoint() << std::endl;
-//                     std::cout << "local position: " << simHit.localPosition() << std::endl;
-//                     std::cout << "particle type: " << simHit.particleType() << std::endl;
-//                     std::cout << "trackId: " << simHit.trackId() << std::endl;
-//                     
-// //                     if (simHit.entryPoint().z() * simHit.exitPoint().z() >=0.) {
-//                     if (std::abs(simHit.localPosition().z()) > 1e-4) {
-//                       std::cout << "anomalous simhit!" << std::endl;
-//                     }
-                    
-//                     assert(simHit.entryPoint().z() * simHit.exitPoint().z() < 0.);
-                    
-                    Vector2d dysimgenlocal;
-                    dysimgenlocal << simHit.localPosition().x() - updtsos.localPosition().x(),
-                                    simHit.localPosition().y() - updtsos.localPosition().y();
-                    const Vector2d dysimgeneig = R*dysimgenlocal;
-                    dxsimgen.push_back(dysimgeneig[0]);
-                    dysimgen.push_back(dysimgeneig[1]);
-//                     dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
-//                     dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
-                    
-                    
-                    Vector2d dyrecsimlocal;
-                    dyrecsimlocal << preciseHit->localPosition().x() - simHit.localPosition().x(),
-                                    preciseHit->localPosition().y() - simHit.localPosition().y();
-                    const Vector2d dyrecsimeig = R*dyrecsimlocal;
-                    dxrecsim.push_back(dyrecsimeig[0]);
-                    dyrecsim.push_back(dyrecsimeig[1]);
-                                    
-//                     dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
-//                     dyrecsim.push_back(preciseHit->localPosition().y() - simHit.localPosition().y());
-                    
-                    simvalid = true;
+  //             if (ispixel) {
+  //               const SiPixelCluster& cluster = *tkhit->cluster_pixel();
+  //               dxreccluster.push_back(cluster.x() - preciseHit->localPosition().x());
+  //               dyreccluster.push_back(cluster.y() - preciseHit->localPosition().y());
+  //             }
+  //             else {
+  //               dxreccluster.push_back(-99.);
+  //               dyreccluster.push_back(-99.);
+  //             }
+              
+              if (doSim_) {
+                bool simvalid = false;
+                for (auto const& simhith : simHits) {
+                  for (const PSimHit& simHit : *simhith) {
+                    if (simHit.detUnitId() == preciseHit->geographicalId()) {
+  //                     std::cout << "entry point: " << simHit.entryPoint() << std::endl;
+  //                     std::cout << "exit point: " << simHit.exitPoint() << std::endl;
+  //                     std::cout << "local position: " << simHit.localPosition() << std::endl;
+  //                     std::cout << "particle type: " << simHit.particleType() << std::endl;
+  //                     std::cout << "trackId: " << simHit.trackId() << std::endl;
+  //                     
+  // //                     if (simHit.entryPoint().z() * simHit.exitPoint().z() >=0.) {
+  //                     if (std::abs(simHit.localPosition().z()) > 1e-4) {
+  //                       std::cout << "anomalous simhit!" << std::endl;
+  //                     }
+                      
+  //                     assert(simHit.entryPoint().z() * simHit.exitPoint().z() < 0.);
+                      
+                      Vector2d dysimgenlocal;
+                      dysimgenlocal << simHit.localPosition().x() - updtsos.localPosition().x(),
+                                      simHit.localPosition().y() - updtsos.localPosition().y();
+                      const Vector2d dysimgeneig = R*dysimgenlocal;
+                      dxsimgen.push_back(dysimgeneig[0]);
+                      dysimgen.push_back(dysimgeneig[1]);
+  //                     dxsimgen.push_back(simHit.localPosition().x() - updtsos.localPosition().x());
+  //                     dysimgen.push_back(simHit.localPosition().y() - updtsos.localPosition().y());
+                      
+                      
+                      Vector2d dyrecsimlocal;
+                      dyrecsimlocal << preciseHit->localPosition().x() - simHit.localPosition().x(),
+                                      preciseHit->localPosition().y() - simHit.localPosition().y();
+                      const Vector2d dyrecsimeig = R*dyrecsimlocal;
+                      dxrecsim.push_back(dyrecsimeig[0]);
+                      dyrecsim.push_back(dyrecsimeig[1]);
+                                      
+  //                     dxrecsim.push_back(preciseHit->localPosition().x() - simHit.localPosition().x());
+  //                     dyrecsim.push_back(preciseHit->localPosition().y() - simHit.localPosition().y());
+                      
+                      simvalid = true;
+                      break;
+                    }
+                  }
+                  if (simvalid) {
                     break;
                   }
                 }
-                if (simvalid) {
-                  break;
+                if (!simvalid) {
+                  dxsimgen.push_back(-99.);
+                  dysimgen.push_back(-99.);
+                  dxrecsim.push_back(-99.);
+                  dyrecsim.push_back(-99.);
                 }
-              }
-              if (!simvalid) {
-                dxsimgen.push_back(-99.);
-                dysimgen.push_back(-99.);
-                dxrecsim.push_back(-99.);
-                dyrecsim.push_back(-99.);
               }
             }
             
