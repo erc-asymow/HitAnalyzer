@@ -266,16 +266,20 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 
   
   Handle<std::vector<reco::GenParticle>> genPartCollection;
+  Handle<std::vector<int>> genPartBarcodes;
   if (doGen_) {
     iEvent.getByToken(GenParticlesToken_, genPartCollection);
+    iEvent.getByToken(genParticlesBarcodeToken_, genPartBarcodes);
   }
   
 //   Handle<std::vector<PSimHit>> tecSimHits;
   std::vector<Handle<std::vector<PSimHit>>> simHits(inputSimHits_.size());
+  edm::Handle<std::vector<SimTrack>> simTracks;
   if (doSim_) {
     for (unsigned int isimhit = 0; isimhit<inputSimHits_.size(); ++isimhit) {
       iEvent.getByToken(inputSimHits_[isimhit], simHits[isimhit]);
     }
+    iEvent.getByToken(inputSimTracks_, simTracks);
   }
   
   Handle<reco::MuonCollection> muons;
@@ -760,7 +764,21 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     genZ = -99.;
     genParms.fill(0.);
     
+    int genBarcode = -99;
+    
+    
     if (doGen_) {
+//       bool isjpsi = false;
+//       for (std::vector<reco::GenParticle>::const_iterator g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
+//       {
+//         if (std::abs(g->pdgId()) == 443) {
+//           isjpsi = true;
+//           break;
+//         }
+//       }
+      
+      float drmin = 0.1;
+      
       for (std::vector<reco::GenParticle>::const_iterator g = genPartCollection->begin(); g != genPartCollection->end(); ++g)
       {
         if (g->status() != 1) {
@@ -770,11 +788,19 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           continue;
         }
         
+//         if (isjpsi && g->charge() != track.charge()) {
+//           continue;
+//         }
+        
         float dR = deltaR(g->phi(), trackPhi, g->eta(), trackEta);
         
-        if (dR < 0.15)
+        if (dR < drmin)
         {
+          drmin = dR;
+          
           genpart = &(*g);
+          
+          genBarcode = (*genPartBarcodes)[g - genPartCollection->begin()];
           
           genPt = g->pt();
           genEta = g->eta();
@@ -802,6 +828,16 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         }
         else {
           continue;
+        }
+      }
+    }
+    
+    int simtrackid = -99;
+    if (genpart != nullptr && doSim_) {
+      for (auto const& simTrack : *simTracks) {
+        if (simTrack.genpartIndex() == genBarcode) {
+          simtrackid = simTrack.trackId();
+          break;
         }
       }
     }
@@ -2661,6 +2697,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
                 for (auto const& simhith : simHits) {
                   for (const PSimHit& simHit : *simhith) {
                     if (simHit.detUnitId() == preciseHit->geographicalId()) {
+                      
+                      if (int(simHit.trackId()) != simtrackid) {
+                        continue;
+                      }
+                      
   //                     std::cout << "entry point: " << simHit.entryPoint() << std::endl;
   //                     std::cout << "exit point: " << simHit.exitPoint() << std::endl;
   //                     std::cout << "local position: " << simHit.localPosition() << std::endl;

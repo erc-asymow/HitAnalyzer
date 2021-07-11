@@ -136,6 +136,7 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
   
   if (doGen_) {
     GenParticlesToken_ = consumes<std::vector<reco::GenParticle>>(edm::InputTag("genParticles"));
+    genParticlesBarcodeToken_ = consumes<std::vector<int>>(edm::InputTag("genParticles"));
   }
   
   if (doSim_) {
@@ -151,6 +152,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     for (const std::string& label : labels) {
       inputSimHits_.push_back(consumes<std::vector<PSimHit>>(edm::InputTag("g4SimHits", label)));
     }
+    
+    inputSimTracks_ = consumes<std::vector<SimTrack>>(edm::InputTag("g4SimHits"));
   }
   
   if (doMuons_) {

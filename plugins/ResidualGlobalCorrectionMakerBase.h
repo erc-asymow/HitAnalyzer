@@ -78,6 +78,7 @@
 #include "FWCore/ServiceRegistry/interface/Service.h"
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 
+#include "SimDataFormats/Track/interface/SimTrack.h"
 
 
 
@@ -244,6 +245,7 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
   edm::EDGetTokenT<std::vector<reco::GenParticle>> GenParticlesToken_;
+  edm::EDGetTokenT<std::vector<int>> genParticlesBarcodeToken_;
 //   edm::EDGetTokenT<TrajTrackAssociationCollection> inputTrack_;
   edm::EDGetTokenT<reco::TrackCollection> inputTrack_;
   edm::EDGetTokenT<reco::TrackCollection> inputTrackOrig_;
@@ -251,6 +253,7 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   edm::EDGetTokenT<reco::BeamSpot> inputBs_;
 //   edm::EDGetTokenT<std::vector<PSimHit>> inputSimHits_;
   std::vector<edm::EDGetTokenT<std::vector<PSimHit>>> inputSimHits_;
+  edm::EDGetTokenT<std::vector<SimTrack>> inputSimTracks_;
   
   edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
 
