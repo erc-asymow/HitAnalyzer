@@ -1660,6 +1660,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         const DetId parmdetid = isglued ? DetId(gluedid) : hit->geographicalId();
         const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : hit->det();
         const double xifraction = isglued ? hit->det()->surface().mediumProperties().xi()/parmDet->surface().mediumProperties().xi() : 1.;
+        
+//         const DetId partnerid = isglued ? trackerTopology->partnerDetId(hit->det()->geographicalId()) : DetId();
+//         
+//         const bool isfront = ihit != (hits.size() - 1) && isglued && hits[ihit+1]->det()->geographicalId() == partnerid;
+//         const bool isback = ihit !=0 && isglued && hits[ihit-1]->det()->geographicalId() == partnerid;
+//         
+//         const double xifraction = isfront ? 0. : 1.;
                 
         TrajectoryStateOnSurface updtsos = propresult.first;
         
@@ -2027,12 +2034,18 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             MSScalar dbeta(0.);
             init_twice_active_var(dbeta, nlocal, localparmidx + 2);
+//             if (!isback) {
+//               init_twice_active_var(dbeta, nlocal, localparmidx + 2);
+//             }
             
             MSScalar dxi(0.);
             init_twice_active_var(dxi, nlocal, localparmidx + 3);
             
             MSScalar dbetap(0.);
             init_twice_active_var(dbetap, nlocal, localparmidx + 4);
+//             if (!isfront) {
+//               init_twice_active_var(dbetap, nlocal, localparmidx + 4);
+//             }
             
             if (dogen && ihit==0) {
               du = Bpref.cast<MSScalar>()*dbeta;
