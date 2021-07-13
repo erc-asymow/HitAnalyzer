@@ -2073,6 +2073,109 @@ AlgebraicVector5 ResidualGlobalCorrectionMakerBase::localMSConvolution(const Tra
   return res;
 }
 
+// Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) {
+//   
+//   //jacobian of local parameters with respect to initial local parameters and material parameter xi
+//   //n.b this is the jacobian in LOCAL parameters (so E multiplies to the left of H s.t the total projection is E*Hprop*F)
+//   
+//   const double m2 = pow(updator.mass(), 2);  // use mass hypothesis from constructor
+//   constexpr double emass = 0.511e-3;
+//   constexpr double poti = 16.e-9 * 10.75;                 // = 16 eV * Z**0.9, for Si Z=14
+//   const double eplasma = 28.816e-9 * sqrt(2.33 * 0.498);  // 28.816 eV * sqrt(rho*(Z/A)) for Si
+//   const double qop = tsos.localParameters().qbp();
+//   const double dxdz = tsos.localParameters().dxdz();
+//   const double dydz = tsos.localParameters().dydz();
+//   const double xi = tsos.surface().mediumProperties().xi();
+//   const double scale = 26.;
+// 
+//   //this is printed from sympy.printing.cxxcode together with sympy.cse for automatic substitution of common expressions
+//   const double x0 = (((qop) > 0) - ((qop) < 0));
+//   const double x1 = std::pow(qop, 2);
+//   const double x2 = 1.0/(m2*x1 + 1);
+//   const double x3 = std::pow(x2, -1.0/2.0);
+//   const double x4 = std::sqrt(std::pow(dxdz, 2) + std::pow(dydz, 2) + 1);
+//   const double x5 = scale*x3*x4;
+//   const double x6 = x5*xi;
+//   const double x7 = x0/std::pow(-x6 + x0/qop, 2);
+//   const double x8 = scale*x3*x7*xi/x4;
+//   const double res_0 = x7*(m2*qop*x2*x6 + x0/x1);
+//   const double res_1 = dxdz*x8;
+//   const double res_2 = dydz*x8;
+//   const double res_3 = x5*x7;
+//   
+//   Matrix<double, 5, 6> EdE = Matrix<double, 5, 6>::Zero();
+//   //jacobian of q/p wrt local state parameters
+//   EdE(0,0) = res_0;
+//   EdE(0,1) = res_1;
+//   EdE(0,2) = res_2;
+//   EdE(1,1) = 1.;
+//   EdE(2,2) = 1.;
+//   EdE(3,3) = 1.;
+//   EdE(4,4) = 1.;
+//   //derivative of q/p wrt xi
+//   EdE(0,5) = res_3;
+//   
+//   return EdE;
+// }
+
+
+// Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) {
+//   
+//   //jacobian of local parameters with respect to initial local parameters and material parameter xi
+//   //n.b this is the jacobian in LOCAL parameters (so E multiplies to the left of H s.t the total projection is E*Hprop*F)
+//   
+//   const double m2 = pow(updator.mass(), 2);  // use mass hypothesis from constructor
+//   constexpr double emass = 0.511e-3;
+//   constexpr double poti = 16.e-9 * 10.75;                 // = 16 eV * Z**0.9, for Si Z=14
+//   const double eplasma = 28.816e-9 * sqrt(2.33 * 0.498);  // 28.816 eV * sqrt(rho*(Z/A)) for Si
+//   const double qop = tsos.localParameters().qbp();
+//   const double dxdz = tsos.localParameters().dxdz();
+//   const double dydz = tsos.localParameters().dydz();
+//   const double xi = tsos.surface().mediumProperties().xi();
+// 
+//   //this is printed from sympy.printing.cxxcode together with sympy.cse for automatic substitution of common expressions
+//   const double x0 = (((qop) > 0) - ((qop) < 0));
+//   const double x1 = std::pow(qop, 2);
+//   const double x2 = 1.0/x1;
+//   const double x3 = m2*x1 + 1;
+//   const double x4 = 1.0/x3;
+//   const double x5 = 1.0/poti;
+//   const double x6 = std::sqrt(std::pow(dxdz, 2) + std::pow(dydz, 2) + 1);
+//   const double x7 = x3*xi;
+//   const double x8 = -2*std::log(eplasma*x5) + std::log(x5*x6*x7) + std::log(2.0*emass*x2/(m2*std::pow(poti, 2))) + 1.2;
+//   const double x9 = x3*x8 - 1;
+//   const double x10 = std::pow(x4, -1.0/2.0);
+//   const double x11 = x10*x6;
+//   const double x12 = x11*x9;
+//   const double x13 = x12*xi;
+//   const double x14 = 1.0/qop;
+//   const double x15 = 2*m2*qop;
+//   const double x16 = x0/std::pow(x0*x14 - x13, 2);
+//   const double x17 = x10/x6;
+//   const double x18 = dxdz*x17;
+//   const double x19 = x9*xi;
+//   const double x20 = dydz*x17;
+//   const double res_0 = x16*(m2*qop*x13*x4 + x0*x2 + x11*xi*(x15*x8 + x3*(-2.0*x14 + x15*x4)));
+//   const double res_1 = x16*(x18*x19 + x18*x7);
+//   const double res_2 = x16*(x19*x20 + x20*x7);
+//   const double res_3 = x16*(x11*x3 + x12);
+// 
+//   
+//   Matrix<double, 5, 6> EdE = Matrix<double, 5, 6>::Zero();
+//   //jacobian of q/p wrt local state parameters
+//   EdE(0,0) = res_0;
+//   EdE(0,1) = res_1;
+//   EdE(0,2) = res_2;
+//   EdE(1,1) = 1.;
+//   EdE(2,2) = 1.;
+//   EdE(3,3) = 1.;
+//   EdE(4,4) = 1.;
+//   //derivative of q/p wrt xi
+//   EdE(0,5) = res_3;
+//   
+//   return EdE;
+// }
+
 Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::materialEffectsJacobian(const TrajectoryStateOnSurface& tsos, const MaterialEffectsUpdator& updator) {
   
   //jacobian of local parameters with respect to initial local parameters and material parameter xi

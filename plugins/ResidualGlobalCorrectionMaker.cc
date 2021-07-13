@@ -1835,6 +1835,31 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //           if (false) {
             //forward propagation jacobian (local to local)
             const Matrix<double, 5, 6> FdFp = curv2curvTransportJacobian(*updtsos.freeState(), propresult, false);
+            
+//             const float finitedB = 1e-2;
+//             fieldOffset->setOffset(finitedB);
+//             
+//             auto const propresultalt = fPropagator->geometricalPropagator().propagateWithPath(updtsos, surfaceip1);
+//             
+//             fieldOffset->setOffset(0.);
+// 
+// //             JacobianCurvilinearToCartesian curv2cartdebug(propresult.first.parameters());
+// //             const AlgebraicMatrix65& jac = curv2cart.jacobian();
+//             
+//             JacobianCurvilinearToLocal curv2localdebug(propresult.first.surface(), propresult.first.localParameters(), *propresult.first.magneticField());
+//             const AlgebraicMatrix55& curv2localjacdebug = curv2localdebug.jacobian();
+//             const Matrix<double, 5, 5> Hdebug = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacdebug.Array()); 
+//             
+//             const AlgebraicVector5 dparms = (propresultalt.first.localParameters().vector() - propresult.first.localParameters().vector())/finitedB;
+//             
+//             const Vector5d jacnom = Hdebug*FdFp.block<5,1>(0, 5);
+//             
+//             std::cout << "qop0 = " << updtsos.signedInverseMomentum() << std::endl;
+//             std::cout << "nominal b field jacobian:" << std::endl;
+//             std::cout << jacnom << std::endl;
+//             std::cout << "finite diff b field jacobian:" << std::endl;
+//             std::cout << dparms << std::endl;
+            
 
             Matrix<double, 2, 2> J = FdFp.block<2, 2>(3, 3);
             // (du/dalphap)^-1

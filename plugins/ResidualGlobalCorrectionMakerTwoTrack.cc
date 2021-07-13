@@ -172,8 +172,8 @@ void ResidualGlobalCorrectionMakerTwoTrack::beginStream(edm::StreamID streamid)
     tree->Branch("Muplus_refParms", Muplus_refParms.data(), "Muplus_refParms[5]/F");
     tree->Branch("MuMinus_refParms", MuMinus_refParms.data(), "MuMinus_refParms[5]/F");
     
-    tree->Branch("Muplus_jacRef", &Muplus_jacRef);
-    tree->Branch("Muminus_jacRef", &Muminus_jacRef);
+//     tree->Branch("Muplus_jacRef", &Muplus_jacRef);
+//     tree->Branch("Muminus_jacRef", &Muminus_jacRef);
     
     tree->Branch("Muplus_nhits", &Muplus_nhits);
     tree->Branch("Muplus_nvalid", &Muplus_nvalid);
