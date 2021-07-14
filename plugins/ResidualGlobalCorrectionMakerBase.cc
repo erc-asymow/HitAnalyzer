@@ -213,8 +213,7 @@ void ResidualGlobalCorrectionMakerBase::beginStream(edm::StreamID streamid)
     if (fillGrads_) {
       tree->Branch("gradv", gradv.data(), "gradv[nParms]/F", basketSize);
       tree->Branch("nSym", &nSym, basketSize);
-//       tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
-      tree->Branch("hessv", &hessv);
+      tree->Branch("hesspackedv", hesspackedv.data(), "hesspackedv[nSym]/F", basketSize);
       
       tree->Branch("gradmax", &gradmax);
       tree->Branch("hessmax", &hessmax);
