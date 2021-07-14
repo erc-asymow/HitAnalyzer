@@ -322,6 +322,8 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
   std::vector<float> hesspackedv;
   
+  std::vector<float> hessv;
+  
   std::vector<unsigned int> hitidxv;
   std::vector<float> dxrecgen;
   std::vector<float> dyrecgen;

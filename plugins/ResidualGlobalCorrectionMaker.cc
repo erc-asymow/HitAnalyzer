@@ -3179,23 +3179,26 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
     //fill packed hessian and indices
     const unsigned int nsym = npars*(1+npars)/2;
-    hesspackedv.clear();    
-    hesspackedv.resize(nsym, 0.);
+//     hesspackedv.clear();    
+//     hesspackedv.resize(nsym, 0.);
     
     nSym = nsym;
-    if (fillTrackTree_ && fillGrads_) {
-      tree->SetBranchAddress("hesspackedv", hesspackedv.data());
-    }
+//     if (fillTrackTree_ && fillGrads_) {
+//       tree->SetBranchAddress("hesspackedv", hesspackedv.data());
+//     }
     
-    Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
-    const Map<const VectorXu> globalidx(globalidxv.data(), npars);
-
-    unsigned int packedidx = 0;
-    for (unsigned int ipar = 0; ipar < npars; ++ipar) {
-      const unsigned int segmentsize = npars - ipar;
-      hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
-      packedidx += segmentsize;
-    }
+//     Map<VectorXf> hesspacked(hesspackedv.data(), nsym);
+//     const Map<const VectorXu> globalidx(globalidxv.data(), npars);
+// 
+//     unsigned int packedidx = 0;
+//     for (unsigned int ipar = 0; ipar < npars; ++ipar) {
+//       const unsigned int segmentsize = npars - ipar;
+//       hesspacked.segment(packedidx, segmentsize) = hess.block<1, Dynamic>(ipar, ipar, 1, segmentsize).cast<float>();
+//       packedidx += segmentsize;
+//     }
+    
+    hessv.resize(npars*npars);
+    Map<Matrix<float, Dynamic, Dynamic, RowMajor>>(hessv.data(), npars, npars) = hess.cast<float>();
 
     if (fillTrackTree_) {
       tree->Fill();
