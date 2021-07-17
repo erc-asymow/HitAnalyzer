@@ -355,6 +355,7 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
   std::map<std::pair<int, DetId>, unsigned int> detidparms;
   std::vector<std::pair<int, DetId>> detidparmsrev;
+  std::map<DetId, std::array<int, 3>> detidlayermap;
   
   std::map<DetId, ReferenceCountingPointer<Plane>> surfacemap_;
   std::vector<float> corparms_;

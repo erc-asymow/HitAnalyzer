@@ -478,6 +478,9 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       detidparmsrev.emplace_back(key);
       globalidx++;
       
+      
+      detidlayermap[detid] = {{ subdet, layer, stereo }};
+      
       runtree->Fill();
     }
     

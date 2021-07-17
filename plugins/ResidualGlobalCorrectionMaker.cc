@@ -893,6 +893,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     
 //     printf("building hits\n");
     
+    std::set<std::array<int, 3>> hitlayers;
+    
     for (auto it = track.recHitsBegin(); it != track.recHitsEnd(); ++it) {
       const GeomDet* detectorG = globalGeometry->idToDet((*it)->geographicalId());
       const GluedGeomDet* detglued = dynamic_cast<const GluedGeomDet*>(detectorG);
@@ -905,6 +907,16 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         
         hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
         hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
+        
+//         auto const& layerinner = detidlayermap.at(detinner->geographicalId());
+//         auto const& layerouter = detidlayermap.at(detouter->geographicalId());
+        
+//         if (!hitlayers.count(layerinner))
+//           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detinner, (*it)->type())));
+//         hitlayers.insert(layerinner);
+//         if (!hitlayers.count(layerouter))
+//           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detouter, (*it)->type())));
+//         hitlayers.insert(layerouter);
       }
       else {
         // apply hit quality criteria
@@ -998,13 +1010,26 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //           }
 //         }
 
-        
+
         if (hitquality) {
           hits.push_back((*it)->cloneForFit(*detectorG));
         }
         else {
           hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
         }
+
+        
+//         auto const &layer = detidlayermap.at((*it)->geographicalId());
+//         
+//         if (!hitlayers.count(layer)) {
+//           if (hitquality) {
+//             hits.push_back((*it)->cloneForFit(*detectorG));
+//           }
+//           else {
+//             hits.push_back(TrackingRecHit::RecHitPointer(new InvalidTrackingRecHit(*detectorG, TrackingRecHit::inactive)));
+//           }
+//         }
+//         hitlayers.insert(layer);
       }
     }
     
@@ -1019,8 +1044,17 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
     unsigned int nvalidpixel = 0;
     unsigned int nvalidalign2d = 0;
     
+//     std::set<std::array<int, 3>> hitlayers;
+    
     // count valid hits since this is needed to size the arrays
     for (auto const& hit : hits) {
+//       auto const &layers = detidlayermap.at(hit->geographicalId());
+//       if (hitlayers.count(layers)) {
+//         std::cout << "WARNING: multiple hits on the same layer!!!" << std::endl;
+//         std::cout << layers[0] << " " << layers[1] << " " << layers[2] << std::endl;
+//       }
+//       hitlayers.insert(layers);
+      
       assert(hit->dimension()<=2);
       if (hit->isValid()) {
         nvalid += 1;
@@ -1495,6 +1529,13 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         auto const& dxlocal = dxstate.head<5>();
         const Matrix<double, 6, 1> globupd = Map<const Matrix<double, 6, 1>>(glob.Array()) + Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array())*dxlocal;
         
+//         const Vector6d dglob = Map<const Matrix<double, 6, 5, RowMajor>>(jac.Array())*dxlocal;
+//         
+//         std::cout << "iiter = " << iiter << std::endl;
+//         std::cout << "dxlocal "  << dxlocal << std::endl;
+//         std::cout << "glob " << glob << std::endl;
+//         std::cout << "dglob " << dglob << std::endl;
+        
         const GlobalPoint pos(globupd[0], globupd[1], globupd[2]);
         const GlobalVector mom(globupd[3], globupd[4], globupd[5]);
         const double charge = std::copysign(1., refFts.charge()/refFts.momentum().mag() + dxlocal[0]);
@@ -1529,7 +1570,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
 //       std::cout << "position on beampipe " << propresult.first.globalParameters().position() << std::endl;
       
-      const Matrix<double, 5, 6> FdFp = curv2curvTransportJacobian(refFts, propresult, false);
+      const Matrix<double, 5, 6> FdFp = curv2localTransportJacobian(refFts, propresult, false);
 
       Matrix<double, 2, 2> J = FdFp.block<2, 2>(3, 3);
       // (du/dalphap)^-1
@@ -1649,7 +1690,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       }
       
       
-      Matrix<double, 5, 6> FdFm = curv2curvTransportJacobian(refFts, propresult, true);
+      Matrix<double, 5, 6> FdFm = curv2localTransportJacobian(refFts, propresult, true);
       
       for (unsigned int ihit = 0; ihit < hits.size(); ++ihit) {
 //         std::cout << "ihit " << ihit << std::endl;
@@ -1694,7 +1735,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
         // curvilinear to local jacobian
         JacobianCurvilinearToLocal curv2localm(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
         const AlgebraicMatrix55& curv2localjacm = curv2localm.jacobian();
-        const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
+//         const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
         
         //energy loss jacobian
         const Matrix<double, 5, 6> EdE = materialEffectsJacobian(updtsos, fPropagator->materialEffectsUpdator());
@@ -1775,12 +1816,12 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           //save current parameters          
           TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
           
-          JacobianCurvilinearToLocal curv2localold(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
-          const AlgebraicMatrix55& curv2localjacold = curv2localold.jacobian();
-          const Matrix<double, 5, 5> Hold = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacold.Array()); 
+//           JacobianCurvilinearToLocal curv2localold(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
+//           const AlgebraicMatrix55& curv2localjacold = curv2localold.jacobian();
+//           const Matrix<double, 5, 5> Hold = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacold.Array()); 
           
           const AlgebraicVector5 local = oldtsos.localParameters().vector();
-          auto const& dxlocal = Hold*dxstate.segment<5>(5*(ihit+1));
+          auto const& dxlocal = dxstate.segment<5>(5*(ihit+1));
           const Matrix<double, 5, 1> localupd = Map<const Matrix<double, 5, 1>>(local.Array()) + dxlocal;
           AlgebraicVector5 localvecupd(localupd[0],localupd[1],localupd[2],localupd[3],localupd[4]);
           
@@ -1841,7 +1882,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           if (true) {
 //           if (false) {
             //forward propagation jacobian (local to local)
-            const Matrix<double, 5, 6> FdFp = curv2curvTransportJacobian(*updtsos.freeState(), propresult, false);
+            const Matrix<double, 5, 6> FdFp = localTransportJacobian(updtsos, propresult, false);
             
 //             const float finitedB = 1e-2;
 //             fieldOffset->setOffset(finitedB);
@@ -2057,19 +2098,19 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
             
             //multiple scattering kink term
             
-            Matrix<MSScalar, 2, 2> Halphalamphim = Hm.block<2,2>(1, 1).cast<MSScalar>();
-            Matrix<MSScalar, 2, 2> Halphaum = Hm.block<2,2>(1, 3).cast<MSScalar>();
+//             Matrix<MSScalar, 2, 2> Halphalamphim = Hm.block<2,2>(1, 1).cast<MSScalar>();
+//             Matrix<MSScalar, 2, 2> Halphaum = Hm.block<2,2>(1, 3).cast<MSScalar>();
             
-            Matrix<MSScalar, 2, 2> Halphalamphip = Hp.block<2,2>(1, 1).cast<MSScalar>();
-            Matrix<MSScalar, 2, 2> Halphaup = Hp.block<2,2>(1, 3).cast<MSScalar>();
+//             Matrix<MSScalar, 2, 2> Halphalamphip = Hp.block<2,2>(1, 1).cast<MSScalar>();
+//             Matrix<MSScalar, 2, 2> Halphaup = Hp.block<2,2>(1, 3).cast<MSScalar>();
             
             const Matrix<MSScalar, 2, 1> dalpha0 = dx0.segment<2>(1).cast<MSScalar>();
    
             const Matrix<MSScalar, 2, 1> dlamphim = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
             const Matrix<MSScalar, 2, 1> dlamphip = Sinvp*(dup - Jp*du - Dp*dqop - Bp*dbetap);
             
-            const Matrix<MSScalar, 2, 1> dalpham = Halphalamphim*dlamphim + Halphaum*du;
-            const Matrix<MSScalar, 2, 1> dalphap = Halphalamphip*dlamphip + Halphaup*du;
+            const Matrix<MSScalar, 2, 1> dalpham = dlamphim;
+            const Matrix<MSScalar, 2, 1> dalphap = dlamphip;
             
             
 //             const Matrix<MSScalar, 2, 1> dalpham = Sinvm*(dum - Jm*du - Dm*dqopm - Bm*dbeta);
@@ -2288,6 +2329,11 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               hesslocal.row(j) = chisq.derivatives()[j].derivatives();
             }
             
+//             std::cout << "gradlocal" << std::endl;
+//             std::cout << gradlocal << std::endl;
+//             std::cout << "hesslocal" << std::endl;
+//             std::cout << hesslocal << std::endl;
+            
             //fill global gradient
             gradfull.segment<nlocalstate>(fullstateidx) += gradlocal.head<nlocalstate>();
             gradfull.segment<nlocalparms>(fullparmidx) += gradlocal.segment<nlocalparms>(localparmidx);
@@ -2307,7 +2353,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
           }
                     
           //backwards propagation jacobian (local to local) to be used at the next layer
-          FdFm = curv2curvTransportJacobian(*updtsos.freeState(), propresult, true);
+          FdFm = localTransportJacobian(updtsos, propresult, true);
           
         }
         else {
@@ -2387,7 +2433,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
 //             }
             
             
-            Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
+//             Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
 
             Matrix<AlignScalar, 2, 1> dy0;
             Matrix<AlignScalar, 2, 2> Vinv;
@@ -2620,7 +2666,7 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
               Vinv = Matrix<AlignScalar, 2, 2>::Zero();
             }
 
-            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
+            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*dx - Ralign*A*dalpha;
             AlignScalar chisq = dh.transpose()*Vinv*dh;
             
             chisq0val += chisq.value().value();
@@ -2939,6 +2985,8 @@ void ResidualGlobalCorrectionMaker::analyze(const edm::Event &iEvent, const edm:
       
       niter = iiter + 1;
       edmval = -deltachisq[0];
+      
+//       std::cout << "iiter = " << iiter << " edmval = " << edmval << std::endl;
       
       if (iiter > 1 && std::abs(deltachisq[0])<1e-3) {
         break;
