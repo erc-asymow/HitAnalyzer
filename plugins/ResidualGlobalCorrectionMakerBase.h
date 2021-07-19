@@ -187,6 +187,10 @@ protected:
                                               const std::pair<TrajectoryStateOnSurface, double>& propresult,
                                               bool doReverse = false) const;
                                               
+  Matrix<double, 5, 6> localTransportJacobianAlt(const TrajectoryStateOnSurface& start,
+                                              const std::pair<TrajectoryStateOnSurface, double>& propresult,
+                                              bool doReverse = false) const;
+                                              
   Matrix<double, 5, 6> curv2localTransportJacobian(const FreeTrajectoryState& start,
                                               const std::pair<TrajectoryStateOnSurface, double>& propresult,
                                               bool doReverse = false) const;
@@ -256,7 +260,8 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   edm::EDGetTokenT<std::vector<SimTrack>> inputSimTracks_;
   
   edm::EDGetTokenT<reco::MuonCollection> inputMuons_;
-
+  edm::EDGetTokenT<int> inputGeometry_;
+  
   std::string corFile_;
   
 //   SiStripClusterInfo siStripClusterInfo_;

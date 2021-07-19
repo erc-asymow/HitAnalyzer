@@ -160,6 +160,8 @@ ResidualGlobalCorrectionMakerBase::ResidualGlobalCorrectionMakerBase(const edm::
     inputMuons_ = consumes<reco::MuonCollection>(edm::InputTag(iConfig.getParameter<edm::InputTag>("muons")));
   }
   
+  inputGeometry_ = consumes<int>(edm::InputTag("geopro"));
+  
   debugprintout_ = false;
 
 
@@ -573,6 +575,7 @@ ResidualGlobalCorrectionMakerBase::beginRun(edm::Run const& run, edm::EventSetup
       
       const float radLen = plane->mediumProperties().radLen();
       const float xi = std::max(plane->mediumProperties().xi() + xifraction*dxi, 0.05*plane->mediumProperties().xi());
+//       const float xi = 0.05*plane->mediumProperties().xi();
       const MediumProperties mp(radLen, xi);
       plane->setMediumProperties(mp);
       
@@ -1904,6 +1907,315 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::localTransportJacobian(c
   Matrix<double, 5, 6> res;
   res.leftCols<5>() = H1*F*H0;
   res.rightCols<1>() = H1*dF;
+  return res;
+                                              
+}
+
+Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::localTransportJacobianAlt(const TrajectoryStateOnSurface &start,
+                                            const std::pair<TrajectoryStateOnSurface, double> &propresult,
+                                            bool doReverse) const {
+  
+  const TrajectoryStateOnSurface& state0 = doReverse ? propresult.first : start;
+  const TrajectoryStateOnSurface& state1 = doReverse ? start : propresult.first;
+  const GlobalVector& bfield = start.globalParameters().magneticFieldInInverseGeV();
+  const double s = doReverse ? -propresult.second : propresult.second;
+  
+  const double qop0 = state0.localParameters().qbp();
+  const double dxdz0 = state0.localParameters().dxdz();
+  const double dydz0 = state0.localParameters().dydz();
+  const double x0 = state0.localParameters().position().x();
+  const double y0 = state0.localParameters().position().y();
+  
+  const double localpzsign = state0.localParameters().pzSign();
+  
+  const LocalVector lx(1.,0.,0.);
+  const LocalVector ly(0.,1.,0.);
+  const LocalVector lz(0.,0.,1.);
+  const LocalPoint l0(0., 0.);
+  
+  const GlobalVector I0 = state0.surface().toGlobal(lz);
+  const GlobalVector J0 = state0.surface().toGlobal(lx);
+  const GlobalVector K0 = state0.surface().toGlobal(ly);  
+  const GlobalPoint r0 = state0.surface().toGlobal(l0);
+  
+  const double Ix0 = I0.x();
+  const double Iy0 = I0.y();
+  const double Iz0 = I0.z();
+  
+  const double Jx0 = J0.x();
+  const double Jy0 = J0.y();
+  const double Jz0 = J0.z();
+  
+  const double Kx0 = K0.x();
+  const double Ky0 = K0.y();
+  const double Kz0 = K0.z();
+  
+  const double rx0 = r0.x();
+  const double ry0 = r0.y();
+  const double rz0 = r0.z();
+  
+  const GlobalVector I1 = state1.surface().toGlobal(lz);
+  const GlobalVector J1 = state1.surface().toGlobal(lx);
+  const GlobalVector K1 = state1.surface().toGlobal(ly);  
+  const GlobalPoint r1 = state1.surface().toGlobal(l0);
+  
+  const double Ix1 = I1.x();
+  const double Iy1 = I1.y();
+  const double Iz1 = I1.z();
+  
+  const double Jx1 = J1.x();
+  const double Jy1 = J1.y();
+  const double Jz1 = J1.z();
+  
+  const double Kx1 = K1.x();
+  const double Ky1 = K1.y();
+  const double Kz1 = K1.z();
+  
+  const double rx1 = r1.x();
+  const double ry1 = r1.y();
+  const double rz1 = r1.z();
+    
+  const double B = bfield.mag();
+  const GlobalVector H = bfield/B;
+  const double hx = H.x();
+  const double hy = H.y();
+  const double hz = H.z();
+    
+  const double x1 = B*s;
+  const double x2 = qop0*x1;
+  const double x3 = std::cos(x2);
+  const double x4 = Ix0 + Jx0*dxdz0 + Kx0*dydz0;
+  const double x5 = x3*x4;
+  const double x6 = std::sin(x2);
+  const double x7 = Iy0 + Jy0*dxdz0 + Ky0*dydz0;
+  const double x8 = hz*x7;
+  const double x9 = Iz0 + Jz0*dxdz0 + Kz0*dydz0;
+  const double x10 = hy*x9;
+  const double x11 = -x10 + x8;
+  const double x12 = x3 - 1;
+  const double x13 = hx*x4 + hy*x7 + hz*x9;
+  const double x14 = x12*x13;
+  const double x15 = -hx*x14 + x11*x6 + x5;
+  const double x16 = std::pow(dxdz0, 2) + std::pow(dydz0, 2) + 1;
+  const double x17 = std::sqrt(x16);
+  const double x18 = 1.0/x17;
+  const double x19 = localpzsign*x18;
+  const double x20 = x15*x19;
+  const double x21 = x3*x7;
+  const double x22 = hx*x9 - hz*x4;
+  const double x23 = x22*x6;
+  const double x24 = -hy*x14 + x21 + x23;
+  const double x25 = x19*x24;
+  const double x26 = x3*x9;
+  const double x27 = hy*x4;
+  const double x28 = hx*x7;
+  const double x29 = x27 - x28;
+  const double x30 = -hz*x14 + x26 + x29*x6;
+  const double x31 = x19*x30;
+  const double x32 = Ix1*x20 + Iy1*x25 + Iz1*x31;
+  const double x33 = 1.0/x32;
+  const double x34 = x1*x6;
+  const double x35 = x1*x3;
+  const double x36 = x13*x34;
+  const double x37 = hx*x36 + x11*x35 - x34*x4;
+  const double x38 = Jx1*x19;
+  const double x39 = hy*x36 + x22*x35 - x34*x7;
+  const double x40 = Jy1*x19;
+  const double x41 = hz*x36 + x29*x35 - x34*x9;
+  const double x42 = Jz1*x19;
+  const double x43 = Ix1*x19;
+  const double x44 = Iy1*x19;
+  const double x45 = Iz1*x19;
+  const double x46 = -x37*x43 - x39*x44 - x41*x45;
+  const double x47 = std::pow(x32, -2);
+  const double x48 = x47*(Jx1*x20 + Jy1*x25 + Jz1*x31);
+  const double x49 = localpzsign*x6;
+  const double x50 = Jx0*x0 + Kx0*y0 + rx0;
+  const double x51 = B*qop0;
+  const double x52 = x17*x51;
+  const double x53 = x10 - x8;
+  const double x54 = localpzsign*x12;
+  const double x55 = x2 - x6;
+  const double x56 = localpzsign*x13;
+  const double x57 = hx*x56;
+  const double x58 = x4*x49 + x50*x52 + x53*x54 + x55*x57;
+  const double x59 = 1.0/B;
+  const double x60 = x18*x59;
+  const double x61 = x60/std::pow(qop0, 2);
+  const double x62 = localpzsign*x1;
+  const double x63 = B*x17;
+  const double x64 = x1*x49;
+  const double x65 = x1 - x35;
+  const double x66 = 1.0/qop0;
+  const double x67 = x60*x66;
+  const double x68 = -x58*x61 + x67*(x5*x62 + x50*x63 - x53*x64 + x57*x65);
+  const double x69 = Jy0*x0 + Ky0*y0 + ry0;
+  const double x70 = hy*x56;
+  const double x71 = -x22*x54 + x49*x7 + x52*x69 + x55*x70;
+  const double x72 = -x61*x71 + x67*(x21*x62 + x23*x62 + x63*x69 + x65*x70);
+  const double x73 = Jz0*x0 + Kz0*y0 + rz0;
+  const double x74 = -x27 + x28;
+  const double x75 = hz*x56;
+  const double x76 = x49*x9 + x52*x73 + x54*x74 + x55*x75;
+  const double x77 = -x61*x76 + x67*(x26*x62 + x63*x73 - x64*x74 + x65*x75);
+  const double x78 = -Ix1*x68 - Iy1*x72 - Iz1*x77;
+  const double x79 = x51*x6;
+  const double x80 = x3*x51;
+  const double x81 = x13*x79;
+  const double x82 = hx*x81 + x11*x80 - x4*x79;
+  const double x83 = hy*x81 + x22*x80 - x7*x79;
+  const double x84 = hz*x81 + x29*x80 - x79*x9;
+  const double x85 = -x43*x82 - x44*x83 - x45*x84;
+  const double x86 = x33*(x33*(x38*x82 + x40*x83 + x42*x84) + x48*x85);
+  const double x87 = Jy0*hz;
+  const double x88 = Jz0*hy;
+  const double x89 = Jx0*hx + Jy0*hy + Jz0*hz;
+  const double x90 = x12*x89;
+  const double x91 = Jx0*x3 - hx*x90 + x6*(x87 - x88);
+  const double x92 = -Jx0*hz + Jz0*hx;
+  const double x93 = Jy0*x3 - hy*x90 + x6*x92;
+  const double x94 = Jx0*hy;
+  const double x95 = Jy0*hx;
+  const double x96 = Jz0*x3 - hz*x90 + x6*(x94 - x95);
+  const double x97 = std::pow(x16, -3.0/2.0);
+  const double x98 = dxdz0*x97;
+  const double x99 = localpzsign*x98;
+  const double x100 = x15*x99;
+  const double x101 = x24*x99;
+  const double x102 = x30*x99;
+  const double x103 = Ix1*x100 + Iy1*x101 + Iz1*x102 - x43*x91 - x44*x93 - x45*x96;
+  const double x104 = x18*x51;
+  const double x105 = dxdz0*x104;
+  const double x106 = localpzsign*x55;
+  const double x107 = x106*x89;
+  const double x108 = x58*x66;
+  const double x109 = x59*x98;
+  const double x110 = -x108*x109 + x67*(Jx0*x49 + hx*x107 + x105*x50 + x54*(-x87 + x88));
+  const double x111 = x109*x66;
+  const double x112 = -x111*x76 + x67*(Jz0*x49 + hz*x107 + x105*x73 + x54*(-x94 + x95));
+  const double x113 = -x111*x71 + x67*(Jy0*x49 + hy*x107 + x105*x69 - x54*x92);
+  const double x114 = -Ix1*x110 - Iy1*x113 - Iz1*x112;
+  const double x115 = Ky0*hz;
+  const double x116 = Kz0*hy;
+  const double x117 = Kx0*hx + Ky0*hy + Kz0*hz;
+  const double x118 = x117*x12;
+  const double x119 = Kx0*x3 - hx*x118 + x6*(x115 - x116);
+  const double x120 = -Kx0*hz + Kz0*hx;
+  const double x121 = Ky0*x3 - hy*x118 + x120*x6;
+  const double x122 = Kx0*hy;
+  const double x123 = Ky0*hx;
+  const double x124 = Kz0*x3 - hz*x118 + x6*(x122 - x123);
+  const double x125 = dydz0*x97;
+  const double x126 = localpzsign*x125;
+  const double x127 = x126*x15;
+  const double x128 = x126*x24;
+  const double x129 = x126*x30;
+  const double x130 = Ix1*x127 + Iy1*x128 + Iz1*x129 - x119*x43 - x121*x44 - x124*x45;
+  const double x131 = dydz0*x104;
+  const double x132 = x106*x117;
+  const double x133 = x125*x59;
+  const double x134 = -x108*x133 + x67*(Kx0*x49 + hx*x132 + x131*x50 + x54*(-x115 + x116));
+  const double x135 = x133*x66;
+  const double x136 = -x135*x76 + x67*(Kz0*x49 + hz*x132 + x131*x73 + x54*(-x122 + x123));
+  const double x137 = -x135*x71 + x67*(Ky0*x49 + hy*x132 - x120*x54 + x131*x69);
+  const double x138 = -Ix1*x134 - Iy1*x137 - Iz1*x136;
+  const double x139 = -Ix1*Jx0 - Iy1*Jy0 - Iz1*Jz0;
+  const double x140 = -Ix1*Kx0 - Iy1*Ky0 - Iz1*Kz0;
+  const double x141 = qop0*s;
+  const double x142 = x141*x6;
+  const double x143 = x141*x3;
+  const double x144 = x13*x142;
+  const double x145 = hx*x144 + x11*x143 - x142*x4;
+  const double x146 = hy*x144 - x142*x7 + x143*x22;
+  const double x147 = hz*x144 - x142*x9 + x143*x29;
+  const double x148 = -x145*x43 - x146*x44 - x147*x45;
+  const double x149 = x18/std::pow(B, 2);
+  const double x150 = localpzsign*x141;
+  const double x151 = qop0*x17;
+  const double x152 = x141*x49;
+  const double x153 = x141 - x143;
+  const double x154 = -x108*x149 + x67*(x150*x5 + x151*x50 - x152*x53 + x153*x57);
+  const double x155 = x149*x66;
+  const double x156 = -x155*x71 + x67*(x150*x21 + x150*x23 + x151*x69 + x153*x70);
+  const double x157 = -x155*x76 + x67*(x150*x26 + x151*x73 - x152*x74 + x153*x75);
+  const double x158 = -Ix1*x154 - Iy1*x156 - Iz1*x157;
+  const double x159 = Kx1*x19;
+  const double x160 = Ky1*x19;
+  const double x161 = Kz1*x19;
+  const double x162 = x47*(Kx1*x20 + Ky1*x25 + Kz1*x31);
+  const double x163 = x33*(x162*x85 + x33*(x159*x82 + x160*x83 + x161*x84));
+  const double x164 = localpzsign*x51;
+  const double x165 = x51 - x80;
+  const double x166 = x67*(x164*x21 + x164*x23 + x165*x70);
+  const double x167 = x49*x51;
+  const double x168 = x67*(x164*x5 + x165*x57 - x167*x53);
+  const double x169 = x67*(x164*x26 + x165*x75 - x167*x74);
+  const double x170 = x33*(Jx1*x168 + Jy1*x166 + Jz1*x169);
+  const double x171 = x33*(Kx1*x168 + Ky1*x166 + Kz1*x169);
+  const double dqopdqop0 = 1;
+  const double dqopddxdz0 = 0;
+  const double dqopddydz0 = 0;
+  const double dqopdx0 = 0;
+  const double dqopdy0 = 0;
+  const double dqopdB = 0;
+  const double ddxdzdqop0 = x33*(x37*x38 + x39*x40 + x41*x42) + x46*x48 + x78*x86;
+  const double ddxdzddxdz0 = x103*x48 + x114*x86 + x33*(-Jx1*x100 - Jy1*x101 - Jz1*x102 + x38*x91 + x40*x93 + x42*x96);
+  const double ddxdzddydz0 = x130*x48 + x138*x86 + x33*(-Jx1*x127 - Jy1*x128 - Jz1*x129 + x119*x38 + x121*x40 + x124*x42);
+  const double ddxdzdx0 = x139*x86;
+  const double ddxdzdy0 = x140*x86;
+  const double ddxdzdB = x148*x48 + x158*x86 + x33*(x145*x38 + x146*x40 + x147*x42);
+  const double ddydzdqop0 = x162*x46 + x163*x78 + x33*(x159*x37 + x160*x39 + x161*x41);
+  const double ddydzddxdz0 = x103*x162 + x114*x163 + x33*(-Kx1*x100 - Ky1*x101 - Kz1*x102 + x159*x91 + x160*x93 + x161*x96);
+  const double ddydzddydz0 = x130*x162 + x138*x163 + x33*(-Kx1*x127 - Ky1*x128 - Kz1*x129 + x119*x159 + x121*x160 + x124*x161);
+  const double ddydzdx0 = x139*x163;
+  const double ddydzdy0 = x140*x163;
+  const double ddydzdB = x148*x162 + x158*x163 + x33*(x145*x159 + x146*x160 + x147*x161);
+  const double dxdqop0 = Jx1*x68 + Jy1*x72 + Jz1*x77 + x170*x78;
+  const double dxddxdz0 = Jx1*x110 + Jy1*x113 + Jz1*x112 + x114*x170;
+  const double dxddydz0 = Jx1*x134 + Jy1*x137 + Jz1*x136 + x138*x170;
+  const double dxdx0 = Jx0*Jx1 + Jy0*Jy1 + Jz0*Jz1 + x139*x170;
+  const double dxdy0 = Jx1*Kx0 + Jy1*Ky0 + Jz1*Kz0 + x140*x170;
+  const double dxdB = Jx1*x154 + Jy1*x156 + Jz1*x157 + x158*x170;
+  const double dydqop0 = Kx1*x68 + Ky1*x72 + Kz1*x77 + x171*x78;
+  const double dyddxdz0 = Kx1*x110 + Ky1*x113 + Kz1*x112 + x114*x171;
+  const double dyddydz0 = Kx1*x134 + Ky1*x137 + Kz1*x136 + x138*x171;
+  const double dydx0 = Jx0*Kx1 + Jy0*Ky1 + Jz0*Kz1 + x139*x171;
+  const double dydy0 = Kx0*Kx1 + Ky0*Ky1 + Kz0*Kz1 + x140*x171;
+  const double dydB = Kx1*x154 + Ky1*x156 + Kz1*x157 + x158*x171;
+  Matrix<double, 5, 6> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopddxdz0;
+  res(0,2) = dqopddydz0;
+  res(0,3) = dqopdx0;
+  res(0,4) = dqopdy0;
+  res(0,5) = dqopdB;
+  res(1,0) = ddxdzdqop0;
+  res(1,1) = ddxdzddxdz0;
+  res(1,2) = ddxdzddydz0;
+  res(1,3) = ddxdzdx0;
+  res(1,4) = ddxdzdy0;
+  res(1,5) = ddxdzdB;
+  res(2,0) = ddydzdqop0;
+  res(2,1) = ddydzddxdz0;
+  res(2,2) = ddydzddydz0;
+  res(2,3) = ddydzdx0;
+  res(2,4) = ddydzdy0;
+  res(2,5) = ddydzdB;
+  res(3,0) = dxdqop0;
+  res(3,1) = dxddxdz0;
+  res(3,2) = dxddydz0;
+  res(3,3) = dxdx0;
+  res(3,4) = dxdy0;
+  res(3,5) = dxdB;
+  res(4,0) = dydqop0;
+  res(4,1) = dyddxdz0;
+  res(4,2) = dyddydz0;
+  res(4,3) = dydx0;
+  res(4,4) = dydy0;
+  res(4,5) = dydB;
+  
+  res.col(5) *= 2.99792458e-3;
+  
   return res;
                                               
 }
