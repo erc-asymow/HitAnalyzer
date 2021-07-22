@@ -208,7 +208,12 @@ protected:
                                                              const GlobalTrajectoryParameters& globalDest,
                                                              const double& s,
                                                              const GlobalVector& bfield) const;
-                                                             
+         
+  Matrix<double, 5, 6> hybrid2curvJacobian(const FreeTrajectoryState &state) const;
+         
+  Matrix<double, 5, 7> hybrid2localTransportJacobian(const FreeTrajectoryState& start,
+                                              const std::pair<TrajectoryStateOnSurface, double>& propresult) const;
+  
   Matrix<double, 5, 7> hybrid2curvTransportJacobian(const FreeTrajectoryState& start,
                                               const std::pair<TrajectoryStateOnSurface, double>& propresult) const;
                                               

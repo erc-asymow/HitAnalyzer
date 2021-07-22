@@ -87,12 +87,10 @@ void ResidualGlobalCorrectionMakerG4e::beginStream(edm::StreamID streamid)
     tree->Branch("nValidHitsFinal", &nValidHitsFinal);
     tree->Branch("nValidPixelHitsFinal", &nValidPixelHitsFinal);
     
-    if (false) {
+    tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
     
-      tree->Branch("jacrefv",jacrefv.data(),"jacrefv[nJacRef]/F", basketSize);
-      
+    if (fitFromGenParms_) {
 
-      
   //     tree->Branch("dxpxb1", &dxpxb1);
   //     tree->Branch("dypxb1", &dypxb1);
   //     
@@ -1339,11 +1337,12 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //       std::cout << genpart->charge() << std::endl;
       
       //zero uncertainty on generated parameters
-//       AlgebraicSymMatrix55 nullerr;
-//       const CurvilinearTrajectoryError referr(nullerr);
+      AlgebraicSymMatrix55 nullerr;
+      const CurvilinearTrajectoryError referr(nullerr);
+//       const CurvilinearTrajectoryError referr;
       
-      refFts = FreeTrajectoryState(refpos, refmom, genpart->charge(), field);
-//       refFts = FreeTrajectoryState(refglobal, referr);
+//       refFts = FreeTrajectoryState(refpos, refmom, genpart->charge(), field);
+      refFts = FreeTrajectoryState(refglobal, referr);
     }
     else {
       //init from track state
@@ -1353,11 +1352,11 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
       const GlobalVector refmom(trackmom.x(), trackmom.y(), trackmom.z()); 
       const GlobalTrajectoryParameters refglobal(refpos, refmom, track.charge(), field);
 //       const CurvilinearTrajectoryError referr(track.covariance());
-      const CurvilinearTrajectoryError referr;
+//       const CurvilinearTrajectoryError referr;
       
       //null uncertainty (tracking process noise sum only)
-//       AlgebraicSymMatrix55 nullerr;
-//       const CurvilinearTrajectoryError referr(nullerr);
+      AlgebraicSymMatrix55 nullerr;
+      const CurvilinearTrajectoryError referr(nullerr);
       
 //       refFts = FreeTrajectoryState(refpos, refmom, track.charge(), field);
       refFts = FreeTrajectoryState(refglobal, referr);
@@ -1582,11 +1581,13 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
       
 //       std::cout << "beamline p = " << refFts.momentum().mag() << std::endl;
       
-//       auto const &surface0orig = *hits[0]->surface();
+//       auto const &surface0 = *hits[0]->surface();
+//       const Plane &surface0 = *hits[0]->surface();
       auto const &surface0 = *surfacemap_.at(hits[0]->geographicalId());
 //       printf("detid = %u, parmdetid = %u, old = %p, new  = %p\n", hits[0]->geographicalId().rawId(), parmdetid0.rawId(), &surface0orig, &surface0);
 //       std::cout << "old xi = " << surface0orig.mediumProperties().xi() << " new xi = " << surface0.mediumProperties().xi() << " dxi = " << surface0.mediumProperties().xi() - surface0orig.mediumProperties().xi() << std::endl;
-      auto propresultref = thePropagator->propagateWithPath(refFts, surface0);
+//       auto propresultref = thePropagator->propagateWithPath(refFts, surface0);
+      auto const propresultref = g4prop->propagateGenericWithJacobian(refFts, surface0);
 //       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *hits[0]->surface());
 //       auto propresult = fPropagator->geometricalPropagator().propagateWithPath(refFts, *beampipe);
       if (!propresultref.first.isValid()) {
@@ -1596,23 +1597,25 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
       }
       TrajectoryStateOnSurface updtsos = propresultref.first;
       
+      Matrix<double, 5, 7> FdFm = Map<const Matrix<double, 5, 7, RowMajor>>(propresultref.second.Array());
+      
 //       double dqop = propresult.first.signedInverseMomentum() - refFts.signedInverseMomentum();
       
 //       std::cout << "position on beampipe " << propresult.first.globalParameters().position() << std::endl;
       
 //       const Matrix<double, 5, 6> FdFp = curv2curvTransportJacobian(refFts, propresult, false);
 //       Matrix<double, 5, 6> FdFm = curv2curvTransportJacobian(refFts, propresult, false);
-      Matrix<double, 5, 6> FdFm = curv2localTransportJacobian(refFts, propresultref, false);
-      
-      const Matrix<double, 5, 6> Fcurv = curv2curvTransportJacobian(refFts, propresultref, false);
-      
-      auto const propresultjac = g4prop->propagateGenericWithJacobian(refFts, surface0);
+//       Matrix<double, 5, 6> FdFm = curv2localTransportJacobian(refFts, propresultref, false);
 //       
-      std::cout << "Fcurv" << std::endl;
-      std::cout << Fcurv << std::endl;
+//       const Matrix<double, 5, 6> Fcurv = curv2curvTransportJacobian(refFts, propresultref, false);
 //       
-      std::cout << "Fcurv g4e" << std::endl;
-      std::cout << propresultjac.second << std::endl;
+//       auto const propresultjac = g4prop->propagateGenericWithJacobian(refFts, surface0);
+// //       
+//       std::cout << "Fcurv" << std::endl;
+//       std::cout << Fcurv << std::endl;
+// //       
+//       std::cout << "Fcurv g4e" << std::endl;
+//       std::cout << propresultjac.second << std::endl;
       
       
       //TODO add back beamspot constraint
@@ -1646,8 +1649,11 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
           
           
 //        auto const &surfaceip1 = *hits[ihit+1]->surface();
+//           auto const &surface = *hit->surface();
+//           const Plane &surface = *hit->surface();
           auto const &surface = *surfacemap_.at(hit->geographicalId());
-          auto propresult = thePropagator->propagateWithPath(updtsos, surface);
+//           auto propresult = thePropagator->propagateWithPath(updtsos, surface);
+          auto propresult = g4prop->propagateGenericWithJacobian(*updtsos.freeState(), surface);
 //           propresult = fPropagator->geometricalPropagator().propagateWithPath(updtsos, *hits[ihit+1]->surface());
           if (!propresult.first.isValid()) {
             std::cout << "Abort: Propagation Failed!" << std::endl;
@@ -1655,35 +1661,24 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             break;
           }
           
-          FdFm = localTransportJacobian(updtsos, propresult, false);
+          FdFm = Map<const Matrix<double, 5, 7, RowMajor>>(propresult.second.Array());
+//           FdFm = localTransportJacobian(updtsos, propresult, false);
           updtsos = propresult.first;
         }
+        
+//         std::cout << "FdFm" << std::endl;
+//         std::cout << FdFm << std::endl;
         
 //         std::cout << "ihit = " << ihit << " p = " << updtsos.globalMomentum().mag() << std::endl;
         
         
-        //apply measurement update if applicable
-//         std::cout << "constructing preciseHit" << std::endl;
-        auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
-        if (hit->isValid() && !preciseHit->isValid()) {
-          std::cout << "Abort: Failed updating hit" << std::endl;
-          valid = false;
-          break;
-        }
-        
-//         const uint32_t gluedid = trackerTopology->glued(preciseHit->det()->geographicalId());
-//         const bool isglued = gluedid != 0;
-//         const DetId parmdetid = isglued ? DetId(gluedid) : preciseHit->geographicalId();
-//         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
-//         const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : preciseHit->det();
-        
-        const bool align2d = detidparms.count(std::make_pair(1, preciseHit->geographicalId()));
+
 
         
         // curvilinear to local jacobian
         JacobianCurvilinearToLocal curv2localm(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
         const AlgebraicMatrix55& curv2localjacm = curv2localm.jacobian();
-//         const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
+        const Matrix<double, 5, 5> Hm = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacm.Array()); 
         
         // compute convolution correction in local coordinates (BEFORE material effects are applied)
 //         const Matrix<double, 2, 1> dxlocalconv = localPositionConvolution(updtsos);
@@ -1714,13 +1709,13 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
           //save current parameters          
           TrajectoryStateOnSurface& oldtsos = layerStates[ihit];
           
-//           JacobianCurvilinearToLocal curv2localold(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
-//           const AlgebraicMatrix55& curv2localjacold = curv2localold.jacobian();
-//           const Matrix<double, 5, 5> Hold = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacold.Array()); 
+          JacobianCurvilinearToLocal curv2localold(oldtsos.surface(), oldtsos.localParameters(), *oldtsos.magneticField());
+          const AlgebraicMatrix55& curv2localjacold = curv2localold.jacobian();
+          const Matrix<double, 5, 5> Hold = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjacold.Array()); 
           
           const AlgebraicVector5 local = oldtsos.localParameters().vector();
-          auto const& dxlocal = dxfull.segment<5>(5*(ihit+1));
-//           auto const& dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
+//           auto const& dxlocal = dxfull.segment<5>(5*(ihit+1));
+          auto const& dxlocal = Hold*dxfull.segment<5>(5*(ihit+1));
           const Matrix<double, 5, 1> localupd = Map<const Matrix<double, 5, 1>>(local.Array()) + dxlocal;
           AlgebraicVector5 localvecupd(localupd[0],localupd[1],localupd[2],localupd[3],localupd[4]);
           
@@ -1736,6 +1731,23 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
           updtsos = oldtsos;
 
         }
+        
+        //apply measurement update if applicable
+//         std::cout << "constructing preciseHit" << std::endl;
+        auto const& preciseHit = hit->isValid() ? cloner.makeShared(hit, updtsos) : hit;
+        if (hit->isValid() && !preciseHit->isValid()) {
+          std::cout << "Abort: Failed updating hit" << std::endl;
+          valid = false;
+          break;
+        }
+        
+//         const uint32_t gluedid = trackerTopology->glued(preciseHit->det()->geographicalId());
+//         const bool isglued = gluedid != 0;
+//         const DetId parmdetid = isglued ? DetId(gluedid) : preciseHit->geographicalId();
+//         const bool align2d = detidparms.count(std::make_pair(1, parmdetid));
+//         const GeomDet* parmDet = isglued ? globalGeometry->idToDet(parmdetid) : preciseHit->det();
+        
+        const bool align2d = detidparms.count(std::make_pair(1, preciseHit->geographicalId()));
         
         // curvilinear to local jacobian
         JacobianCurvilinearToLocal curv2localp(updtsos.surface(), updtsos.localParameters(), *updtsos.magneticField());
@@ -1802,10 +1814,11 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             
             
             Matrix<MSScalar, 5, 5> Fstate = FdFm.leftCols<5>().cast<MSScalar>();
-            Matrix<MSScalar, 5, 1> Fb = FdFm.rightCols<1>().cast<MSScalar>();
+            Matrix<MSScalar, 5, 1> Fb = FdFm.col(5).cast<MSScalar>();
+            Matrix<MSScalar, 5, 1> Fxi = FdFm.col(6).cast<MSScalar>();
             
-//             Matrix<MSScalar, 5, 5> Hmstate = Hm.cast<MSScalar>();
-//             Matrix<MSScalar, 5, 5> Hpstate = Hp.cast<MSScalar>();
+            Matrix<MSScalar, 5, 5> Hmstate = Hm.cast<MSScalar>();
+            Matrix<MSScalar, 5, 5> Hpstate = Hp.cast<MSScalar>();
             
             Matrix<MSScalar, 5, 5> Qinv = Q.inverse().cast<MSScalar>();
                                     
@@ -1827,8 +1840,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
             MSScalar dxi(0.);
             init_twice_active_var(dxi, nlocal, localparmidx + 1);
                         
-//             const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta;
-            const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + du - Fstate*dum - Fb*dbeta;
+            const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + Hpstate*du - Hmstate*Fstate*dum - Hmstate*Fb*dbeta - Hmstate*Fxi*dxi;
+//             const Matrix<MSScalar, 5, 1> dprop = dx0.cast<MSScalar>() + du - Fstate*dum - Fb*dbeta;
             const MSScalar chisq = dprop.transpose()*Qinv*dprop;
             
             chisq0val += chisq.value().value();
@@ -1908,7 +1921,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
 //             }
             
             
-//             Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
+            Matrix<AlignScalar, 2, 2> Hu = Hp.bottomRightCorner<2,2>().cast<AlignScalar>();
 
             Matrix<AlignScalar, 2, 1> dy0;
             Matrix<AlignScalar, 2, 2> Vinv;
@@ -2134,8 +2147,8 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
               Vinv = Matrix<AlignScalar, 2, 2>::Zero();
             }
 
-//             Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
-            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*dx - Ralign*A*dalpha;
+            Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*Hu*dx - Ralign*A*dalpha;
+//             Matrix<AlignScalar, 2, 1> dh = dy0 - Ralign*dx - Ralign*A*dalpha;
             AlignScalar chisq = dh.transpose()*Vinv*dh;
             
             chisq0val += chisq.value().value();
@@ -2530,7 +2543,7 @@ void ResidualGlobalCorrectionMakerG4e::analyze(const edm::Event &iEvent, const e
       tree->SetBranchAddress("gradv", gradv.data());
     }
     if (fillTrackTree_) {
-//       tree->SetBranchAddress("jacrefv", jacrefv.data());
+      tree->SetBranchAddress("jacrefv", jacrefv.data());
     }
     
     //eigen representation of the underlying vector storage

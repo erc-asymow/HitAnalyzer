@@ -1163,6 +1163,137 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::curvtransportJacobian(co
                                                                
 }
 
+Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::hybrid2curvJacobian(const FreeTrajectoryState &state) const {
+  const GlobalTrajectoryParameters &globalSource = state.parameters();
+  const GlobalVector &bfield = state.parameters().magneticFieldInInverseGeV();
+  
+  CurvilinearTrajectoryParameters curvparms(globalSource.position(), globalSource.momentum(), globalSource.charge());
+
+  const double qop0 = globalSource.signedInverseMomentum();
+  const double lam0 = curvparms.lambda();
+  const double phi0 = curvparms.phi();
+
+  const double x0 = globalSource.position().x();
+  const double y0 = globalSource.position().y();
+  const double z0 = globalSource.position().z();
+  
+  const double p0 = globalSource.momentum().mag();
+  const GlobalVector W0 = globalSource.momentum()/p0;
+  const double W0x = W0.x();
+  const double W0y = W0.y();
+  const double W0z = W0.z();
+  
+  const double B = bfield.mag();
+  const GlobalVector H = bfield/B;
+  const double hx = H.x();
+  const double hy = H.y();
+  const double hz = H.z();
+  
+  const double xf0 = std::cos(lam0);
+  const double xf1 = std::pow(xf0, 2);
+  const double xf2 = std::sqrt(xf1);
+  const double xf3 = 2*phi0;
+  const double xf4 = std::sin(xf3);
+  const double xf5 = std::cos(xf3);
+  const double xf6 = B*qop0;
+  const double xf7 = (1.0/4.0)*xf6*std::sqrt(2*std::cos(2*lam0) + 2);
+  const double xf8 = std::tan(lam0);
+  const double xf9 = std::sin(phi0);
+  const double xf10 = std::cos(phi0);
+  const double xf11 = std::sin(lam0);
+  const double xf12 = xf6*(hx*xf10*xf11 + hy*xf11*xf9 - hz*xf0);
+  const double xf13 = std::pow(W0x, 2) + std::pow(W0y, 2);
+  const double xf14 = std::pow(xf13, -1.0/2.0);
+  const double xf15 = W0x*xf9;
+  const double xf16 = W0y*xf10;
+  const double xf17 = xf1*(xf15 - xf16);
+  const double xf18 = W0x*W0z;
+  const double xf19 = W0y*W0z;
+  const double xf20 = xf0*xf10*xf18 + xf0*xf19*xf9 - xf11*xf13;
+  const double xf21 = xf0*xf20;
+  const double dqopdqop0 = 1;
+  const double dqopdlam0 = 0;
+  const double dqopdphi0 = 0;
+  const double dqopdx0 = 0;
+  const double dqopdy0 = 0;
+  const double dqopdz0 = 0;
+  const double dlamdqop0 = 0;
+  const double dlamdlam0 = xf2/xf0;
+  const double dlamdphi0 = 0;
+  const double dlamdx0 = xf7*(hx*xf4 - hy*xf5 - hy);
+  const double dlamdy0 = xf7*(-hx*xf5 + hx - hy*xf4);
+  const double dlamdz0 = xf2*xf6*xf8*(hx*xf9 - hy*xf10);
+  const double dphidqop0 = 0;
+  const double dphidlam0 = 0;
+  const double dphidphi0 = 1;
+  const double dphidx0 = -xf10*xf12;
+  const double dphidy0 = -xf12*xf9;
+  const double dphidz0 = -xf12*xf8;
+  const double dxtdqop0 = 0;
+  const double dxtdlam0 = 0;
+  const double dxtdphi0 = 0;
+  const double dxtdx0 = -xf14*(W0y + xf10*xf17);
+  const double dxtdy0 = xf14*(W0x - xf17*xf9);
+  const double dxtdz0 = xf0*xf11*xf14*(-xf15 + xf16);
+  const double dytdqop0 = 0;
+  const double dytdlam0 = 0;
+  const double dytdphi0 = 0;
+  const double dytdx0 = xf14*(xf10*xf21 - xf18);
+  const double dytdy0 = xf14*(-xf19 + xf21*xf9);
+  const double dytdz0 = xf14*(xf11*xf20 + xf13);
+  Matrix<double, 5, 6> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdx0;
+  res(0,4) = dqopdy0;
+  res(0,5) = dqopdz0;
+  res(1,0) = dlamdqop0;
+  res(1,1) = dlamdlam0;
+  res(1,2) = dlamdphi0;
+  res(1,3) = dlamdx0;
+  res(1,4) = dlamdy0;
+  res(1,5) = dlamdz0;
+  res(2,0) = dphidqop0;
+  res(2,1) = dphidlam0;
+  res(2,2) = dphidphi0;
+  res(2,3) = dphidx0;
+  res(2,4) = dphidy0;
+  res(2,5) = dphidz0;
+  res(3,0) = dxtdqop0;
+  res(3,1) = dxtdlam0;
+  res(3,2) = dxtdphi0;
+  res(3,3) = dxtdx0;
+  res(3,4) = dxtdy0;
+  res(3,5) = dxtdz0;
+  res(4,0) = dytdqop0;
+  res(4,1) = dytdlam0;
+  res(4,2) = dytdphi0;
+  res(4,3) = dytdx0;
+  res(4,4) = dytdy0;
+  res(4,5) = dytdz0;
+  
+  return res;
+
+}
+
+
+Matrix<double, 5, 7> ResidualGlobalCorrectionMakerBase::hybrid2localTransportJacobian(const FreeTrajectoryState& start,
+                                              const std::pair<TrajectoryStateOnSurface, double>& propresult) const {
+                                            
+  // hybrid to curvilinear
+  Matrix<double, 5, 7> FdF = hybrid2curvTransportJacobian(start, propresult);
+  
+  // compute curvilinear to local jacobian at destination
+  const TrajectoryStateOnSurface &state1 = propresult.first;
+  JacobianCurvilinearToLocal curv2local(state1.surface(), state1.localParameters(), *state1.magneticField());
+  const AlgebraicMatrix55& curv2localjac = curv2local.jacobian();
+  const Matrix<double, 5, 5> H1 = Map<const Matrix<double, 5, 5, RowMajor>>(curv2localjac.Array());
+  
+  return H1*FdF;
+                                                
+}
+
 Matrix<double, 5, 7> ResidualGlobalCorrectionMakerBase::hybrid2curvTransportJacobian(const FreeTrajectoryState& start,
                                               const std::pair<TrajectoryStateOnSurface, double>& propresult) const {
         
