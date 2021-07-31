@@ -2042,6 +2042,170 @@ Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::localTransportJacobian(c
                                               
 }
 
+
+Matrix<double, 5, 5> ResidualGlobalCorrectionMakerBase::curv2localJacobianAlt(const TrajectoryStateOnSurface &state) const {
+  
+
+  const GlobalTrajectoryParameters &globalSource = state.globalParameters();
+  const GlobalVector &bfield = state.globalParameters().magneticFieldInInverseGeV();
+  
+  CurvilinearTrajectoryParameters curvparms(globalSource.position(), globalSource.momentum(), globalSource.charge());
+
+  const double qop0 = curvparms.Qbp();
+  const double lam0 = curvparms.lambda();
+  const double phi0 = curvparms.phi();
+  const double xt0 = curvparms.xT();
+  const double yt0 = curvparms.yT();
+  
+  const double p0 = globalSource.momentum().mag();
+  const GlobalVector W0 = globalSource.momentum()/p0;
+  const double W0x = W0.x();
+  const double W0y = W0.y();
+  const double W0z = W0.z();
+    
+  const LocalVector lx(1.,0.,0.);
+  const LocalVector ly(0.,1.,0.);
+  const LocalVector lz(0.,0.,1.);
+  const LocalPoint l0(0., 0.);
+  
+  const GlobalVector I1 = state.surface().toGlobal(lz);
+  const GlobalVector J1 = state.surface().toGlobal(lx);
+  const GlobalVector K1 = state.surface().toGlobal(ly);  
+  const GlobalPoint r1 = state.surface().toGlobal(l0);
+  
+  const double Ix1 = I1.x();
+  const double Iy1 = I1.y();
+  const double Iz1 = I1.z();
+  
+  const double Jx1 = J1.x();
+  const double Jy1 = J1.y();
+  const double Jz1 = J1.z();
+  
+  const double Kx1 = K1.x();
+  const double Ky1 = K1.y();
+  const double Kz1 = K1.z();
+  
+  const double rx1 = r1.x();
+  const double ry1 = r1.y();
+  const double rz1 = r1.z();
+    
+  const double B = bfield.mag();
+  const GlobalVector H = bfield/B;
+  const double hx = H.x();
+  const double hy = H.y();
+  const double hz = H.z();
+      
+  const double x0 = std::sin(lam0);
+  const double x1 = Iz1*x0;
+  const double x2 = std::cos(lam0);
+  const double x3 = std::cos(phi0);
+  const double x4 = Ix1*x3;
+  const double x5 = std::sin(phi0);
+  const double x6 = Iy1*x5;
+  const double x7 = x1 + x2*x4 + x2*x6;
+  const double x8 = std::pow(x7, -2);
+  const double x9 = Iz1*Jx1;
+  const double x10 = Iz1*Jy1;
+  const double x11 = lam0 + phi0;
+  const double x12 = -phi0;
+  const double x13 = lam0 + x12;
+  const double x14 = std::pow(Ix1*std::cos(x11) + Ix1*std::cos(x13) + Iy1*std::sin(x11) - Iy1*std::sin(x13) + 2*x1, -2);
+  const double x15 = 2*Ix1;
+  const double x16 = Jy1*x15;
+  const double x17 = 2*Iy1;
+  const double x18 = Jx1*x17;
+  const double x19 = 2*lam0;
+  const double x20 = std::cos(x19);
+  const double x21 = phi0 + x19;
+  const double x22 = std::cos(x21);
+  const double x23 = std::sin(x21);
+  const double x24 = Ix1*Jz1;
+  const double x25 = Iy1*Jz1;
+  const double x26 = x12 + x19;
+  const double x27 = std::cos(x26);
+  const double x28 = std::sin(x26);
+  const double x29 = Ix1*W0y - Iy1*W0x;
+  const double x30 = hz*x2;
+  const double x31 = hx*x0 - x3*x30;
+  const double x32 = hy*x0 - x30*x5;
+  const double x33 = x2*(hx*x5 - hy*x3);
+  const double x34 = x2*x3;
+  const double x35 = x2*x5;
+  const double x36 = Jx1*x34 + Jy1*x35 + Jz1*x0;
+  const double x37 = -Ix1*x32 + Iy1*x31 - Iz1*x33;
+  const double x38 = std::pow(W0x, 2) + std::pow(W0y, 2);
+  const double x39 = std::pow(x38, -1.0/2.0);
+  const double x40 = B*qop0*x39/std::pow(x7, 3);
+  const double x41 = x40*(-x36*x37 + x7*(-Jx1*x32 + Jy1*x31 - Jz1*x33));
+  const double x42 = Ix1*W0x*W0z + Iy1*W0y*W0z - Iz1*x38;
+  const double x43 = Iz1*Kx1;
+  const double x44 = Iz1*Ky1;
+  const double x45 = Ky1*x15;
+  const double x46 = Kx1*x17;
+  const double x47 = Ix1*Kz1;
+  const double x48 = Iy1*Kz1;
+  const double x49 = Kx1*x34 + Ky1*x35 + Kz1*x0;
+  const double x50 = x40*(-x37*x49 + x7*(-Kx1*x32 + Ky1*x31 - Kz1*x33));
+  const double x51 = x39/x7;
+  const double x52 = x38*x7;
+  const double x53 = W0z*x7;
+  const double dqopdqop0 = 1;
+  const double dqopdlam0 = 0;
+  const double dqopdphi0 = 0;
+  const double dqopdxt0 = 0;
+  const double dqopdyt0 = 0;
+  const double ddxdzdqop0 = 0;
+  const double ddxdzdlam0 = x8*(Jz1*x4 + Jz1*x6 - x10*x5 - x3*x9);
+  const double ddxdzdphi0 = x14*(x10*x23 + x10*x28 + x16*x20 + x16 - x18*x20 - x18 - x22*x24 + x22*x9 - x23*x25 + x24*x27 - x25*x28 - x27*x9);
+  const double ddxdzdxt0 = x29*x41;
+  const double ddxdzdyt0 = x41*x42;
+  const double ddydzdqop0 = 0;
+  const double ddydzdlam0 = x8*(Kz1*x4 + Kz1*x6 - x3*x43 - x44*x5);
+  const double ddydzdphi0 = x14*(x20*x45 - x20*x46 + x22*x43 - x22*x47 + x23*x44 - x23*x48 - x27*x43 + x27*x47 + x28*x44 - x28*x48 + x45 - x46);
+  const double ddydzdxt0 = x29*x50;
+  const double ddydzdyt0 = x42*x50;
+  const double dxdqop0 = 0;
+  const double dxdlam0 = 0;
+  const double dxdphi0 = 0;
+  const double dxdxt0 = x51*(x29*x36 + x7*(-Jx1*W0y + Jy1*W0x));
+  const double dxdyt0 = x51*(Jz1*x52 + x36*x42 - x53*(Jx1*W0x + Jy1*W0y));
+  const double dydqop0 = 0;
+  const double dydlam0 = 0;
+  const double dydphi0 = 0;
+  const double dydxt0 = x51*(x29*x49 + x7*(-Kx1*W0y + Ky1*W0x));
+  const double dydyt0 = x51*(Kz1*x52 + x42*x49 - x53*(Kx1*W0x + Ky1*W0y));
+  Matrix<double, 5, 5> res;
+  res(0,0) = dqopdqop0;
+  res(0,1) = dqopdlam0;
+  res(0,2) = dqopdphi0;
+  res(0,3) = dqopdxt0;
+  res(0,4) = dqopdyt0;
+  res(1,0) = ddxdzdqop0;
+  res(1,1) = ddxdzdlam0;
+  res(1,2) = ddxdzdphi0;
+  res(1,3) = ddxdzdxt0;
+  res(1,4) = ddxdzdyt0;
+  res(2,0) = ddydzdqop0;
+  res(2,1) = ddydzdlam0;
+  res(2,2) = ddydzdphi0;
+  res(2,3) = ddydzdxt0;
+  res(2,4) = ddydzdyt0;
+  res(3,0) = dxdqop0;
+  res(3,1) = dxdlam0;
+  res(3,2) = dxdphi0;
+  res(3,3) = dxdxt0;
+  res(3,4) = dxdyt0;
+  res(4,0) = dydqop0;
+  res(4,1) = dydlam0;
+  res(4,2) = dydphi0;
+  res(4,3) = dydxt0;
+  res(4,4) = dydyt0;
+
+  
+  return res;
+                                              
+}
+
 Matrix<double, 5, 6> ResidualGlobalCorrectionMakerBase::localTransportJacobianAlt(const TrajectoryStateOnSurface &start,
                                             const std::pair<TrajectoryStateOnSurface, double> &propresult,
                                             bool doReverse) const {
@@ -3468,6 +3632,153 @@ Matrix<double, 6, 6> ResidualGlobalCorrectionMakerBase::cartesianToCartesianJaco
   
 }
 
+
+Matrix<double, 1, 6> ResidualGlobalCorrectionMakerBase::massJacobianAlt(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const {
+  
+  const double mp = dmass;
+  
+  CurvilinearTrajectoryParameters curvparms0(state0.position(), state0.momentum(), state0.charge());
+
+  const double qop0 = curvparms0.Qbp();
+  const double lam0 = curvparms0.lambda();
+  const double phi0 = curvparms0.phi();
+
+  CurvilinearTrajectoryParameters curvparms1(state1.position(), state1.momentum(), state1.charge());
+
+  const double qop1 = curvparms1.Qbp();
+  const double lam1 = curvparms1.lambda();
+  const double phi1 = curvparms1.phi();
+
+  const double xf0 = std::pow(mp, 2);
+  const double xf1 = std::sin(lam0);
+  const double xf2 = std::sin(lam1);
+  const double xf3 = 1.0/std::fabs(qop0);
+  const double xf4 = 1.0/std::fabs(qop1);
+  const double xf5 = xf3*xf4;
+  const double xf6 = xf2*xf5;
+  const double xf7 = std::sin(phi0);
+  const double xf8 = std::sin(phi1);
+  const double xf9 = xf7*xf8;
+  const double xf10 = std::cos(lam0);
+  const double xf11 = std::cos(lam1);
+  const double xf12 = xf11*xf5;
+  const double xf13 = xf10*xf12;
+  const double xf14 = 2*xf13;
+  const double xf15 = std::cos(phi0);
+  const double xf16 = std::cos(phi1);
+  const double xf17 = xf15*xf16;
+  const double xf18 = std::pow(qop0, -2);
+  const double xf19 = std::sqrt(xf0 + xf18);
+  const double xf20 = std::pow(qop1, -2);
+  const double xf21 = std::sqrt(xf0 + xf20);
+  const double xf22 = std::sqrt(2*xf0 - 2*xf1*xf6 - xf14*xf17 - xf14*xf9 + 2*xf19*xf21);
+  const double xf23 = xf1*xf2;
+  const double xf24 = xf18*xf4*(((qop0) > 0) - ((qop0) < 0));
+  const double xf25 = xf10*xf11;
+  const double xf26 = xf24*xf25;
+  const double xf27 = 1.0/xf22;
+  const double xf28 = xf10*xf6;
+  const double xf29 = xf1*xf12;
+  const double xf30 = xf13*xf16*xf7;
+  const double xf31 = xf13*xf15*xf8;
+  const double xf32 = xf20*xf3*(((qop1) > 0) - ((qop1) < 0));
+  const double xf33 = xf25*xf32;
+  const double m = xf22;
+  const double dmdqop0 = xf27*(xf17*xf26 + xf23*xf24 + xf26*xf9 - xf21/(std::pow(qop0, 3)*xf19));
+  const double dmdlam0 = xf27*(xf17*xf29 - xf28 + xf29*xf9);
+  const double dmdphi0 = xf27*(xf30 - xf31);
+  const double dmdqop1 = xf27*(xf17*xf33 + xf23*xf32 + xf33*xf9 - xf19/(std::pow(qop1, 3)*xf21));
+  const double dmdlam1 = xf27*(xf17*xf28 + xf28*xf9 - xf29);
+  const double dmdphi1 = xf27*(-xf30 + xf31);
+  Matrix<double, 1, 6> res;
+  res(0,0) = dmdqop0;
+  res(0,1) = dmdlam0;
+  res(0,2) = dmdphi0;
+  res(0,3) = dmdqop1;
+  res(0,4) = dmdlam1;
+  res(0,5) = dmdphi1;
+  
+//   std::cout << "massJacobianAlt m = " << m << std::endl;
+
+
+
+
+  
+  return res;
+}
+
+Matrix<double, 1, 6> ResidualGlobalCorrectionMakerBase::mrJacobian(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const {
+  
+  const double mp = dmass;
+  
+  CurvilinearTrajectoryParameters curvparms0(state0.position(), state0.momentum(), state0.charge());
+
+  const double qop0 = curvparms0.Qbp();
+  const double lam0 = curvparms0.lambda();
+  const double phi0 = curvparms0.phi();
+
+  CurvilinearTrajectoryParameters curvparms1(state1.position(), state1.momentum(), state1.charge());
+
+  const double qop1 = curvparms1.Qbp();
+  const double lam1 = curvparms1.lambda();
+  const double phi1 = curvparms1.phi();
+
+  const double xf0 = std::sin(lam0);
+  const double xf1 = std::sin(lam1);
+  const double xf2 = xf0*xf1;
+  const double xf3 = std::pow(qop0, -2);
+  const double xf4 = 2/std::fabs(qop1);
+  const double xf5 = xf3*xf4*(((qop0) > 0) - ((qop0) < 0));
+  const double xf6 = std::sin(phi0);
+  const double xf7 = std::sin(phi1);
+  const double xf8 = xf6*xf7;
+  const double xf9 = std::cos(lam0);
+  const double xf10 = std::cos(lam1);
+  const double xf11 = xf10*xf9;
+  const double xf12 = xf11*xf5;
+  const double xf13 = std::cos(phi0);
+  const double xf14 = std::cos(phi1);
+  const double xf15 = xf13*xf14;
+  const double xf16 = std::pow(mp, 2);
+  const double xf17 = std::sqrt(xf16 + xf3);
+  const double xf18 = std::pow(qop1, -2);
+  const double xf19 = std::sqrt(xf16 + xf18);
+  const double xf20 = 2*xf19;
+  const double xf21 = 1.0/std::fabs(qop0);
+  const double xf22 = xf21*xf4;
+  const double xf23 = xf1*xf22;
+  const double xf24 = xf10*xf22;
+  const double xf25 = xf24*xf9;
+  const double xf26 = std::pow(-xf0*xf23 - xf15*xf25 + 2*xf16 + xf17*xf20 - xf25*xf8, -2);
+  const double xf27 = xf23*xf9;
+  const double xf28 = xf0*xf24;
+  const double xf29 = xf14*xf25*xf6;
+  const double xf30 = xf13*xf25*xf7;
+  const double xf31 = 2*xf18*xf21*(((qop1) > 0) - ((qop1) < 0));
+  const double xf32 = xf11*xf31;
+  const double dmrdqop0 = xf26*(-xf12*xf15 - xf12*xf8 - xf2*xf5 + xf20/(std::pow(qop0, 3)*xf17));
+  const double dmrdlam0 = xf26*(-xf15*xf28 + xf27 - xf28*xf8);
+  const double dmrdphi0 = xf26*(-xf29 + xf30);
+  const double dmrdqop1 = xf26*(-xf15*xf32 - xf2*xf31 - xf32*xf8 + 2*xf17/(std::pow(qop1, 3)*xf19));
+  const double dmrdlam1 = xf26*(-xf15*xf27 - xf27*xf8 + xf28);
+  const double dmrdphi1 = xf26*(xf29 - xf30);
+  Matrix<double, 1, 6> res;
+  res(0,0) = dmrdqop0;
+  res(0,1) = dmrdlam0;
+  res(0,2) = dmrdphi0;
+  res(0,3) = dmrdqop1;
+  res(0,4) = dmrdlam1;
+  res(0,5) = dmrdphi1;
+
+  
+//   std::cout << "massJacobianAlt m = " << m << std::endl;
+
+
+
+
+  
+  return res;
+}
 
 //define this as a plug-in
 // DEFINE_FWK_MODULE(ResidualGlobalCorrectionMakerBase);

@@ -209,6 +209,8 @@ protected:
                                                              const double& s,
                                                              const GlobalVector& bfield) const;
          
+  Matrix<double, 5, 5> curv2localJacobianAlt(const TrajectoryStateOnSurface &state) const;
+                                                             
   Matrix<double, 5, 6> hybrid2curvJacobian(const FreeTrajectoryState &state) const;
          
   Matrix<double, 5, 7> hybrid2localTransportJacobian(const FreeTrajectoryState& start,
@@ -250,6 +252,10 @@ Matrix<double, 5, 7> hybrid2curvTransportJacobianVar(const GlobalTrajectoryParam
   
 //   Matrix<double, 5, 3> vertexToCurvilinearJacobian(const FreeTrajectoryState &state) const;
   Matrix<double, 6, 6> cartesianToCartesianJacobian(const FreeTrajectoryState &state) const;
+  
+  Matrix<double, 1, 6> massJacobianAlt(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
+  
+  Matrix<double, 1, 6> mrJacobian(const FreeTrajectoryState &state0, const FreeTrajectoryState &state1, double dmass) const;
   
   // ----------member data ---------------------------
   edm::EDGetTokenT<std::vector<Trajectory>> inputTraj_;
